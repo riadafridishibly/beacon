@@ -1,0 +1,47 @@
+package web
+
+import "strconv"
+
+const (
+	InputClass  = "input w-full aria-[invalid=true]:input-error"
+	ButtonClass = "btn btn-primary"
+	LinkClass   = "link link-primary link-hover font-medium"
+	// Below sm, cards run to the screen edges, out of the page's px-4.
+	CardClass       = "rounded-box border border-base-300 bg-base-100 max-sm:-mx-4 max-sm:rounded-none max-sm:border-x-0"
+	PaddedCardClass = CardClass + " px-4 py-5 sm:p-6"
+)
+
+// InputAttrs returns the id, name, and the aria attributes that link a
+// control to the error Field renders.
+func InputAttrs(name, errMsg string) templ.Attributes {
+	attrs := templ.Attributes{"id": name, "name": name}
+	if errMsg != "" {
+		attrs["aria-invalid"] = "true"
+		attrs["aria-describedby"] = name + "-error"
+	}
+	return attrs
+}
+
+// Field is a labelled form control with its validation error.
+templ Field(label, name, errMsg string) {
+	<div class="space-y-1.5">
+		<label for={ name } class="block text-sm font-medium">{ label }</label>
+		{ children... }
+		if errMsg != "" {
+			<p id={ name + "-error" } class="text-sm text-error">{ errMsg }</p>
+		}
+	</div>
+}
+
+// Count formats n with thousands separators, such as 3,989.
+func Count(n int64) string {
+	s := strconv.FormatInt(n, 10)
+	start := 0
+	if n < 0 {
+		start = 1
+	}
+	for i := len(s) - 3; i > start; i -= 3 {
+		s = s[:i] + "," + s[i:]
+	}
+	return s
+}

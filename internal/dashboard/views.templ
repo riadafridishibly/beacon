@@ -1,0 +1,109 @@
+package dashboard
+
+import (
+	"github.com/riadafridishibly/beacon/internal/db"
+	"github.com/riadafridishibly/beacon/internal/web"
+)
+
+templ appListPage(nav *web.Nav, list []db.AppSummariesRow) {
+	@web.Layout("Apps", nav) {
+		@web.PageHeader("Apps") {
+			<a href="/apps/new" class={ web.ButtonClass, "btn-sm" }>New app</a>
+		}
+		if len(list) == 0 {
+			<div class={ web.PaddedCardClass, "text-center" }>
+				<p class="mb-4 opacity-70">No apps yet. Create one to get an ingest key.</p>
+				<a href="/apps/new" class={ web.ButtonClass }>New app</a>
+			</div>
+		} else {
+			<p class="mb-3 text-sm opacity-70">Last 24 hours</p>
+			<ul class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+				for _, a := range list {
+					<li class={ web.PaddedCardClass }>
+						<h2 class="text-lg font-semibold wrap-break-word">{ a.Name }</h2>
+						<p class="mb-4 font-mono text-xs opacity-60">{ a.ID }</p>
+						<dl class="grid grid-cols-3 gap-2">
+							@stat("Events", a.Events, false)
+							@stat("Devices", a.Devices, false)
+							@stat("Errors", a.Errors, a.Errors > 0)
+						</dl>
+					</li>
+				}
+			</ul>
+		}
+	}
+}
+
+templ stat(label string, n int64, alert bool) {
+	<div>
+		<dt class="text-xs opacity-60">{ label }</dt>
+		<dd class={ "text-xl font-semibold tabular-nums", templ.KV("text-error", alert) }>{ web.Count(n) }</dd>
+	</div>
+}
+
+type newAppForm struct {
+	ID, Name           string
+	IDError, NameError string
+}
+
+templ newAppPage(nav *web.Nav, f newAppForm) {
+	@web.Layout("New app", nav) {
+		<div class="mx-auto max-w-lg">
+			@web.PageHeader("New app")
+			<form method="post" action="/apps" class={ web.PaddedCardClass, "space-y-5" }>
+				@web.Field("Id", "id", f.IDError) {
+					<input
+						type="text"
+						{ web.InputAttrs("id", f.IDError)... }
+						value={ f.ID }
+						required
+						autofocus
+						maxlength="63"
+						pattern="[a-z0-9][a-z0-9\-]*"
+						autocomplete="off"
+						spellcheck="false"
+						class={ web.InputClass, "font-mono" }
+					/>
+					<p class="text-sm opacity-60">Lowercase letters, digits and dashes. It can't be changed later.</p>
+				}
+				@web.Field("Name", "name", f.NameError) {
+					<input
+						type="text"
+						{ web.InputAttrs("name", f.NameError)... }
+						value={ f.Name }
+						maxlength="100"
+						autocomplete="off"
+						class={ web.InputClass }
+					/>
+					<p class="text-sm opacity-60">Shown in the dashboard. Defaults to the id.</p>
+				}
+				<div class="flex justify-end gap-2">
+					<a href="/" class="btn btn-ghost">Cancel</a>
+					<button type="submit" class={ web.ButtonClass }>Create app</button>
+				</div>
+			</form>
+		</div>
+	}
+}
+
+templ appCreatedPage(nav *web.Nav, id, key string) {
+	@web.Layout("App created", nav) {
+		<div class="mx-auto max-w-lg">
+			@web.PageHeader("App created")
+			<div class={ web.PaddedCardClass, "space-y-4" }>
+				<p>The ingest key for <span class="font-mono">{ id }</span>:</p>
+				<input
+					type="text"
+					readonly
+					value={ key }
+					aria-label="Ingest key"
+					class={ web.InputClass, "font-mono" }
+				/>
+				<p role="alert" class="alert alert-warning alert-soft"><span>Copy it now. It won’t be shown again; <code class="font-mono">beacon app key { id }</code> makes a new one.</span></p>
+				<div class="flex justify-end">
+					<a href="/" class={ web.ButtonClass }>Done</a>
+				</div>
+			</div>
+		</div>
+	}
+}

@@ -1,3 +1,12 @@
 /bin/
+/node_modules/
 .env
 *.mmdb
+
+# Vite build output, embedded by internal/web/assets.go. The .gitkeep lets
+# `go build` work before the first frontend build.
+/internal/web/dist/*
+!/internal/web/dist/.gitkeep
+
+# templ watch-mode artifacts
+*_templ.txt

@@ -14,7 +14,9 @@ import (
 	"time"
 
 	"github.com/riadafridishibly/beacon/internal/apps"
+	"github.com/riadafridishibly/beacon/internal/auth"
 	"github.com/riadafridishibly/beacon/internal/config"
+	"github.com/riadafridishibly/beacon/internal/dashboard"
 	"github.com/riadafridishibly/beacon/internal/db"
 	"github.com/riadafridishibly/beacon/internal/geo"
 	"github.com/riadafridishibly/beacon/internal/ingest"
@@ -26,7 +28,9 @@ const usage = `usage:
   beacon migrate                 apply database migrations
   beacon app create <id> [name]  add an app and print its ingest key
   beacon app key <id>            print a new ingest key for an app
-  beacon app list                list apps`
+  beacon app list                list apps
+  beacon user create <email>     add a dashboard account and print its password
+  beacon user reset <email>      print a new password and sign the account out`
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -58,6 +62,8 @@ func run(ctx context.Context, args []string) error {
 		return db.Migrate(ctx, pool)
 	case "app":
 		return appCmd(ctx, cfg, args)
+	case "user":
+		return userCmd(ctx, cfg, args)
 	case "help", "-h", "--help":
 		fmt.Println(usage)
 		return nil
@@ -85,8 +91,14 @@ func serve(ctx context.Context, cfg config.Config) error {
 		slog.Warn("BEACON_GEOIP_DB is not set; events get no country or city")
 	}
 
+	dash, err := dashboard.New(pool, dashboard.Config{ViteURL: cfg.ViteURL})
+	if err != nil {
+		return err
+	}
+
 	q := db.New(pool)
 	mux := http.NewServeMux()
+	mux.Handle("/", dash)
 	mux.Handle("POST /v1/events", &ingest.Handler{Apps: apps.NewResolver(q), DB: q, Geo: loc})
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		if err := pool.Ping(r.Context()); err != nil {
@@ -166,4 +178,29 @@ func appCmd(ctx context.Context, cfg config.Config, args []string) error {
 		return nil
 	}
 	return errors.New(usage)
+}
+
+func userCmd(ctx context.Context, cfg config.Config, args []string) error {
+	if len(args) != 2 || (args[0] != "create" && args[0] != "reset") {
+		return errors.New(usage)
+	}
+	pool, err := db.Connect(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+	if err := db.Migrate(ctx, pool); err != nil {
+		return err
+	}
+	var password string
+	if args[0] == "create" {
+		password, err = auth.CreateAccount(ctx, db.New(pool), args[1])
+	} else {
+		password, err = auth.ResetPassword(ctx, pool, args[1])
+	}
+	if err != nil {
+		return err
+	}
+	fmt.Printf("password: %s\n", password)
+	return nil
 }

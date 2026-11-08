@@ -9,6 +9,13 @@ import (
 	"time"
 )
 
+type Account struct {
+	ID           int64
+	Email        string
+	PasswordHash string
+	CreatedAt    time.Time
+}
+
 type App struct {
 	ID        string
 	Name      string
@@ -40,4 +47,12 @@ type Event struct {
 	City       *string
 	Value      *float64
 	Props      json.RawMessage
+}
+
+type Session struct {
+	TokenHash  []byte
+	AccountID  int64
+	CreatedAt  time.Time
+	LastSeenAt time.Time
+	ExpiresAt  time.Time
 }
