@@ -68,15 +68,15 @@ func (c *client) do(method, path string, form url.Values) *httptest.ResponseReco
 
 func (c *client) login(password string) *httptest.ResponseRecorder {
 	c.t.Helper()
-	return c.do(http.MethodPost, "/login", url.Values{"email": {"ops@example.com"}, "password": {password}, "next": {"/apps/new"}})
+	return c.do(http.MethodPost, "/login", url.Values{"email": {"ops@example.com"}, "password": {password}, "next": {"/new-app"}})
 }
 
 func TestLogin(t *testing.T) {
 	t.Parallel()
 	_, c, pw := setup(t)
 
-	w := c.do(http.MethodGet, "/apps/new", nil)
-	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/login?next=%2Fapps%2Fnew" {
+	w := c.do(http.MethodGet, "/new-app", nil)
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/login?next=%2Fnew-app" {
 		t.Fatalf("signed out: %d %s", w.Code, w.Header().Get("Location"))
 	}
 	if !strings.Contains(w.Header().Get("Content-Security-Policy"), "script-src 'self' http://localhost:8341") {
@@ -91,7 +91,7 @@ func TestLogin(t *testing.T) {
 	}
 
 	w = c.login(pw)
-	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/apps/new" {
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/new-app" {
 		t.Fatalf("login: %d %s", w.Code, w.Header().Get("Location"))
 	}
 	if c.cookie == nil || !c.cookie.Secure || !c.cookie.HttpOnly {
@@ -177,7 +177,7 @@ func TestCreateApp(t *testing.T) {
 	pool, c, pw := setup(t)
 	c.login(pw)
 
-	if w := c.do(http.MethodGet, "/apps/new", nil); w.Code != http.StatusOK {
+	if w := c.do(http.MethodGet, "/new-app", nil); w.Code != http.StatusOK {
 		t.Fatalf("form: %d", w.Code)
 	}
 	w := c.do(http.MethodPost, "/apps", url.Values{"id": {"my-app"}, "name": {"My App"}})

@@ -1,0 +1,204 @@
+package dashboard
+
+import (
+	"math"
+	"reflect"
+	"testing"
+	"time"
+)
+
+func fp(v float64) *float64 { return &v }
+
+func testDays(n int) []time.Time {
+	days := make([]time.Time, n)
+	for i := range days {
+		days[i] = time.Date(2026, 11, 1+i, 0, 0, 0, 0, time.UTC)
+	}
+	return days
+}
+
+func TestNiceTicks(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		top, minStep float64
+		want         []float64
+	}{
+		{1, 1, []float64{0, 1}},
+		{3, 1, []float64{0, 1, 2, 3}},
+		{7, 1, []float64{0, 2, 4, 6, 8}},
+		{812, 1, []float64{0, 500, 1000}},
+		{100, 1, []float64{0, 50, 100}},
+		{0, 1, []float64{0, 1}},
+	} {
+		if got := niceTicks(tt.top, tt.minStep); !reflect.DeepEqual(got, tt.want) {
+			t.Errorf("niceTicks(%v) = %v, want %v", tt.top, got, tt.want)
+		}
+	}
+}
+
+func TestDurationTicks(t *testing.T) {
+	t.Parallel()
+	for top, want := range map[float64][]float64{
+		45:    {0, 20, 40, 60},
+		300:   {0, 120, 240, 360},
+		10000: {0, 3600, 7200, 10800},
+	} {
+		if got := durationTicks(top); !reflect.DeepEqual(got, want) {
+			t.Errorf("durationTicks(%v) = %v, want %v", top, got, want)
+		}
+	}
+}
+
+func TestFormats(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct{ got, want string }{
+		{formatMillis(0), "0"},
+		{formatMillis(812.4), "812 ms"},
+		{formatMillis(1500), "1.5 s"},
+		{formatDuration(0), "0"},
+		{formatDuration(45), "45s"},
+		{formatDuration(252), "4m 12s"},
+		{formatDuration(300), "5m"},
+		{formatDuration(3600), "1h"},
+		{formatDuration(5400), "1h 30m"},
+		{compactCount(9999), "9,999"},
+		{compactCount(12500), "12.5K"},
+		{compactCount(2_000_000), "2M"},
+	} {
+		if tt.got != tt.want {
+			t.Errorf("got %q, want %q", tt.got, tt.want)
+		}
+	}
+}
+
+func TestAxisLabels(t *testing.T) {
+	t.Parallel()
+	for n, want := range map[int][]string{
+		1:  {"Nov 1"},
+		2:  {"Nov 1", "Nov 2"},
+		7:  {"Nov 1", "Nov 3", "Nov 5", "Nov 7"},
+		30: {"Nov 1", "Nov 11", "Nov 21", "Nov 30"},
+	} {
+		var got []string
+		labels := axisLabels(testDays(n))
+		for _, l := range labels {
+			got = append(got, l.Text)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("%d days: %v, want %v", n, got, want)
+		}
+	}
+	labels := axisLabels(testDays(30))
+	if labels[0].Anchor != "start" || labels[0].X != "0%" || labels[3].Anchor != "end" || labels[3].X != "100%" {
+		t.Errorf("edge labels aren't kept inside the plot: %+v", labels)
+	}
+}
+
+func lineChartOf(values ...*float64) chartData {
+	return chartData{
+		Kind: lineChart, Days: testDays(len(values)), Format: millisFormat,
+		Series: []series{withValues(slot1, "p50", values)},
+	}
+}
+
+func TestLineBreaksAtGaps(t *testing.T) {
+	t.Parallel()
+	v := layout(lineChartOf(fp(1), fp(2), nil, fp(3), nil, nil, nil, nil, fp(4), fp(5)))
+	l := v.Lines[0]
+	if len(l.Segments) != 2 {
+		t.Errorf("segments = %d, want 2 (no line across a gap)", len(l.Segments))
+	}
+	// The lone point at index 3 and the last point at index 9.
+	if len(l.Dots) != 2 || l.Dots[0].X != "35.000%" || l.Dots[1].X != "95.000%" {
+		t.Errorf("dots = %+v", l.Dots)
+	}
+	if v.Rows[2].Values[0] != "–" {
+		t.Errorf("gap in table = %q", v.Rows[2].Values[0])
+	}
+}
+
+func TestLayoutEmpty(t *testing.T) {
+	t.Parallel()
+	if v := layout(lineChartOf(nil, nil)); v.HasData || len(v.Ticks) != 0 {
+		t.Errorf("no values: HasData %v, ticks %v", v.HasData, v.Ticks)
+	}
+	zero := chartData{
+		Kind: columnChart, Days: testDays(2), Format: countFormat,
+		Series: []series{withValues(slot1, "Opens", []*float64{fp(0), fp(0)})},
+	}
+	if layout(zero).HasData {
+		t.Error("all zero: HasData")
+	}
+}
+
+func TestColumns(t *testing.T) {
+	t.Parallel()
+	values := []*float64{fp(100), fp(0), fp(1)}
+	v := layout(chartData{
+		Kind: columnChart, Days: testDays(3), Format: countFormat,
+		Series: []series{withValues(slot1, "Opens", values)},
+	})
+	if len(v.Bars) != 2 {
+		t.Fatalf("bars = %d, want 2 (zero draws nothing)", len(v.Bars))
+	}
+	if b := v.Bars[0]; b.Y != plotTop || b.Y+b.Height != plotBase+barOverhang {
+		t.Errorf("tallest bar = %+v", b)
+	}
+	if b := v.Bars[1]; b.Height-barOverhang != 2 {
+		t.Errorf("small bar height = %v, want the 2px minimum", b.Height-barOverhang)
+	}
+	if v.BarWidth != "20.00" {
+		t.Errorf("BarWidth = %q", v.BarWidth)
+	}
+	many := make([]*float64, 90)
+	for i := range many {
+		many[i] = fp(5)
+	}
+	w := layout(chartData{
+		Kind: columnChart, Days: testDays(90), Format: countFormat,
+		Series: []series{withValues(slot1, "Opens", many)},
+	})
+	if w.BarWidth != "0.778%" {
+		t.Errorf("90 day BarWidth = %q", w.BarWidth)
+	}
+}
+
+func TestTooltipStaysInPlot(t *testing.T) {
+	t.Parallel()
+	v := layout(lineChartOf(fp(1), fp(2), fp(3), fp(4)))
+	if tip := v.Hits[0].Tooltip; tip.X <= 0 {
+		t.Errorf("left half tooltip X = %v, want to the right of the day", tip.X)
+	}
+	if tip := v.Hits[3].Tooltip; tip.X+tip.Width >= 0 {
+		t.Errorf("right half tooltip ends at %v, want left of the day", tip.X+tip.Width)
+	}
+}
+
+func TestFinite(t *testing.T) {
+	t.Parallel()
+	if finite(math.Inf(1)) != nil || finite(math.NaN()) != nil || finite(1) == nil {
+		t.Error("finite keeps only real numbers")
+	}
+}
+
+func TestWindow(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 11, 8, 12, 30, 0, 0, time.UTC)
+	today := time.Date(2026, 11, 8, 0, 0, 0, 0, time.UTC)
+
+	since, until, days := window("7d", now)
+	if !since.Equal(today.AddDate(0, 0, -6)) || !until.Equal(today.AddDate(0, 0, 1)) || len(days) != 7 {
+		t.Errorf("7d: %v %v %d days", since, until, len(days))
+	}
+	if !days[0].Equal(since) || !days[6].Equal(today) {
+		t.Errorf("7d days: %v .. %v", days[0], days[6])
+	}
+
+	since, _, days = window("24h", now)
+	if !since.Equal(now.Add(-24*time.Hour)) || len(days) != 2 || !days[1].Equal(today) {
+		t.Errorf("24h: %v, %v", since, days)
+	}
+	if _, _, days := window("90d", now); len(days) != 90 {
+		t.Errorf("90d: %d days", len(days))
+	}
+}

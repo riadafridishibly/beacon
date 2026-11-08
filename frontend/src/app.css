@@ -74,6 +74,20 @@
   --noise: 0;
 }
 
+/* Chart series. Blue then orange, validated for color vision deficiency on
+   each theme's card surface. */
+@theme {
+  --color-chart-1: #2a78d6;
+  --color-chart-2: #eb6834;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-chart-1: #3987e5;
+    --color-chart-2: #d95926;
+  }
+}
+
 /* htmx's built-in indicator styles are inline, which the CSP blocks. */
 .htmx-indicator {
   opacity: 0;
