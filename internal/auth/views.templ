@@ -1,0 +1,44 @@
+package auth
+
+import "github.com/riadafridishibly/beacon/internal/web"
+
+type loginView struct {
+	Email string
+	Next  string
+	Error string
+}
+
+templ loginPage(v loginView) {
+	@web.Layout("Sign in", nil) {
+		<div class="mx-auto max-w-sm">
+			<h1 class="mb-6 text-2xl font-semibold tracking-tight">Sign in</h1>
+			<form method="post" action={ templ.SafeURL(LoginPath) } class={ web.PaddedCardClass, "space-y-5" }>
+				if v.Error != "" {
+					<p role="alert" class="alert alert-error alert-soft">{ v.Error }</p>
+				}
+				<input type="hidden" name="next" value={ v.Next }/>
+				@web.Field("Email", "email", "") {
+					<input
+						type="email"
+						{ web.InputAttrs("email", "")... }
+						value={ v.Email }
+						autocomplete="username"
+						required
+						autofocus
+						class={ web.InputClass }
+					/>
+				}
+				@web.Field("Password", "password", "") {
+					<input
+						type="password"
+						{ web.InputAttrs("password", "")... }
+						autocomplete="current-password"
+						required
+						class={ web.InputClass }
+					/>
+				}
+				<button type="submit" class={ web.ButtonClass, "w-full" }>Sign in</button>
+			</form>
+		</div>
+	}
+}

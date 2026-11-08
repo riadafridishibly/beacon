@@ -3,27 +3,35 @@
 beacon is a generic telemetry server: one Go binary and PostgreSQL. Keep it
 free of product names; an app is just an id in the `apps` table.
 
+The dashboard is server-rendered: templ, htmx, Tailwind 4 with daisyUI 5,
+built with Vite into `internal/web/dist` and embedded. Node is needed only
+to build.
+
 Design notes and decisions live in GitHub issues (`gh issue ...`), not in
 the repo. Don't add docs files.
 
 ## Commands
 
+- `make setup`: install pnpm packages (once).
 - `make db-setup`: create the `beacon` database (once). `make db-up` starts Postgres in Docker instead.
-- `make dev`: run the server on 127.0.0.1:8080.
-- `make gen`: regenerate Go from `internal/db/queries/*.sql`. Run it after editing SQL.
-- `make check`: gen, go vet, golangci-lint, go test. **Work is done only when this passes.**
+- `make dev`: Vite plus the server with live reload; open http://localhost:7331.
+- `make gen`: regenerate Go from `*.templ` and `internal/db/queries/*.sql`. Run it after editing either.
+- `make check`: gen, templ fmt, go vet, golangci-lint, go test, tsc, biome, frontend build. **Work is done only when this passes.**
 
 ## Layout
 
 ```
-cmd/beacon/        serve, migrate, app create|key|list
-internal/config/   BEACON_* environment
-internal/db/       Connect, Migrate, migrations/, queries/, sqlc output (don't edit generated files)
-internal/apps/     apps, ingest keys, Resolver (key -> app id, cached)
-internal/ingest/   POST /v1/events
-internal/geo/      country and city from a MaxMind format database
-internal/web/      middleware: Logger, Recoverer, RealIP
-internal/testdb/   per-test databases copied from a migrated template
+cmd/beacon/          serve, migrate, app create|key|list, user create|reset
+frontend/src/        main.ts (htmx setup), app.css (Tailwind + daisyUI theme)
+internal/config/     BEACON_* environment
+internal/db/         Connect, Migrate, migrations/, queries/, sqlc output (don't edit generated files)
+internal/apps/       apps, ingest keys, Resolver (key -> app id, cached)
+internal/ingest/     POST /v1/events
+internal/geo/        country and city from a MaxMind format database
+internal/auth/       dashboard accounts, argon2id passwords, sessions, login page
+internal/dashboard/  dashboard handler and pages
+internal/web/        middleware, CSP, Handle/Render, layout, embedded Vite build
+internal/testdb/     per-test databases copied from a migrated template
 ```
 
 ## Rules
@@ -32,6 +40,7 @@ internal/testdb/   per-test databases copied from a migrated template
 - Never edit a shipped migration; add a new one.
 - Go code calls sqlc methods and never builds SQL strings.
 - Never store client IP addresses. Geo lookup happens at ingest and the address is dropped.
+- The CSP forbids inline scripts, inline styles and eval: no `<script>` blocks, `style=""`, `onclick=""` or `hx-on:*` in templates.
 
 ## Comments and prose
 

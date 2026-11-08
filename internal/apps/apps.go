@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/riadafridishibly/beacon/internal/db"
@@ -30,6 +31,9 @@ var idPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 // and dashes.
 var ErrBadID = errors.New("app id must be 1-63 lowercase letters, digits or dashes, starting with a letter or digit")
 
+// ErrExists is returned when creating an app whose id is taken.
+var ErrExists = errors.New("an app with that id already exists")
+
 // Create adds an app with its first ingest key and returns the key.
 func Create(ctx context.Context, pool *pgxpool.Pool, id, name string) (string, error) {
 	if !idPattern.MatchString(id) {
@@ -41,10 +45,13 @@ func Create(ctx context.Context, pool *pgxpool.Pool, id, name string) (string, e
 	var key string
 	err := pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
 		q := db.New(tx)
-		if _, err := q.CreateApp(ctx, db.CreateAppParams{ID: id, Name: name}); err != nil {
+		_, err := q.CreateApp(ctx, db.CreateAppParams{ID: id, Name: name})
+		if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" {
+			return ErrExists
+		}
+		if err != nil {
 			return fmt.Errorf("create app: %w", err)
 		}
-		var err error
 		key, err = addKey(ctx, q, id)
 		return err
 	})

@@ -7,6 +7,7 @@ package db
 
 import (
 	"context"
+	"time"
 )
 
 const appForKey = `-- name: AppForKey :one
@@ -19,6 +20,51 @@ func (q *Queries) AppForKey(ctx context.Context, keyHash []byte) (string, error)
 	var app_id string
 	err := row.Scan(&app_id)
 	return app_id, err
+}
+
+const appSummaries = `-- name: AppSummaries :many
+SELECT a.id, a.name,
+       count(e.id) AS events,
+       count(DISTINCT e.device_id) AS devices,
+       count(e.id) FILTER (WHERE e.name LIKE 'error.%') AS errors
+FROM apps a
+LEFT JOIN events e ON e.app_id = a.id AND e.ts >= $1
+GROUP BY a.id
+ORDER BY a.id
+`
+
+type AppSummariesRow struct {
+	ID      string
+	Name    string
+	Events  int64
+	Devices int64
+	Errors  int64
+}
+
+func (q *Queries) AppSummaries(ctx context.Context, since time.Time) ([]AppSummariesRow, error) {
+	rows, err := q.db.Query(ctx, appSummaries, since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AppSummariesRow{}
+	for rows.Next() {
+		var i AppSummariesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Events,
+			&i.Devices,
+			&i.Errors,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const createApp = `-- name: CreateApp :one

@@ -9,10 +9,13 @@ PG_ADMIN_URL        ?= postgres://localhost:5432/postgres?sslmode=disable
 BEACON_DATABASE_URL ?= postgres://localhost:5432/beacon?sslmode=disable
 export BEACON_DATABASE_URL
 
-.PHONY: help db-setup db-up dev gen fmt check test build build-linux clean
+.PHONY: help setup db-setup db-up dev dev-vite dev-go gen fmt check test build frontend build-linux clean
 
 help: ## List targets
 	@grep -E '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
+
+setup: ## Install the pnpm packages the frontend build needs
+	pnpm install
 
 db-setup: ## Create the beacon database on PG_ADMIN_URL
 	psql "$(PG_ADMIN_URL)" -tAc "SELECT 1 FROM pg_database WHERE datname = 'beacon'" | grep -q 1 \
@@ -21,28 +24,45 @@ db-setup: ## Create the beacon database on PG_ADMIN_URL
 db-up: ## Start PostgreSQL 17 in Docker instead of a local server
 	docker compose up -d --wait db
 
-dev: ## Run the server
-	go run ./cmd/beacon serve
+dev: ## Vite + Go with live reload; open http://localhost:7331
+	@$(MAKE) -j2 dev-vite dev-go
 
-gen: ## Generate Go from the .sql files
+dev-vite:
+	pnpm exec vite
+
+dev-go: export BEACON_DEV = 1
+dev-go:
+	go tool templ generate -watch -proxy=http://127.0.0.1:8080 -open-browser=false -cmd="go run ./cmd/beacon serve"
+
+gen: ## Generate Go from the .templ and .sql files
+	go tool templ generate
 	$(SQLC) generate
 
-fmt: ## Format Go
+fmt: ## Format Go, templ and TypeScript
+	go tool templ fmt .
 	$(GOLANGCI_LINT) fmt
+	pnpm run fix
 
 test: ## Go tests (need PostgreSQL, see BEACON_TEST_DATABASE_URL)
 	go test ./...
 
 check: gen ## Everything that must pass before work is done
+	go tool templ fmt -fail .
 	go vet ./...
 	$(GOLANGCI_LINT) run
 	go test ./...
+	pnpm run check
+	pnpm run build
 
-build: ## bin/beacon for this machine
+frontend: ## Build the frontend into internal/web/dist for embedding
+	pnpm run build
+
+build: gen frontend ## bin/beacon for this machine
 	go build -o bin/beacon ./cmd/beacon
 
-build-linux: ## bin/linux-amd64/beacon, static
+build-linux: gen frontend ## bin/linux-amd64/beacon, static
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o bin/linux-amd64/beacon ./cmd/beacon
 
 clean: ## Remove build output
 	rm -rf bin
+	find internal/web/dist -mindepth 1 ! -name .gitkeep -delete

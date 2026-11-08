@@ -1,5 +1,6 @@
-// Package web holds HTTP middleware shared by the API and, later, the
-// dashboard.
+// Package web holds the HTTP plumbing shared by the API and the dashboard:
+// middleware, the error-returning handler type, the page layout, and the
+// embedded frontend build.
 package web
 
 import (
@@ -11,9 +12,13 @@ import (
 	"time"
 )
 
-// Logger logs one line per request.
+// Logger logs one line per request, skipping static assets.
 func Logger(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/static/") {
+			next.ServeHTTP(w, r)
+			return
+		}
 		start := time.Now()
 		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(sw, r)
@@ -52,6 +57,46 @@ func Recoverer(next http.Handler) http.Handler {
 		}()
 		next.ServeHTTP(w, r)
 	})
+}
+
+// SecureHeaders sets the Content-Security-Policy and related headers.
+// viteURL is the Vite dev server origin, allowed in development only;
+// pass "" in production.
+//
+// The policy allows no inline scripts, inline style attributes, or eval, so
+// templates can't use <script> blocks, style="", onclick="", or hx-on:*.
+func SecureHeaders(viteURL string) func(http.Handler) http.Handler {
+	script, style, connect, font := "'self'", "'self'", "'self'", "'self'"
+	if viteURL != "" {
+		ws := "ws" + strings.TrimPrefix(viteURL, "http")
+		script += " " + viteURL
+		font += " " + viteURL
+		// Vite injects CSS as <style> tags in dev.
+		style += " " + viteURL + " 'unsafe-inline'"
+		connect += " " + viteURL + " " + ws
+	}
+	csp := strings.Join([]string{
+		"default-src 'self'",
+		"script-src " + script,
+		"style-src " + style,
+		"connect-src " + connect,
+		"img-src 'self' data:",
+		"font-src " + font,
+		"object-src 'none'",
+		"base-uri 'self'",
+		"form-action 'self'",
+		"frame-ancestors 'none'",
+	}, "; ")
+
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			h := w.Header()
+			h.Set("Content-Security-Policy", csp)
+			h.Set("X-Content-Type-Options", "nosniff")
+			h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 // RealIP sets r.RemoteAddr to the client address from X-Forwarded-For when

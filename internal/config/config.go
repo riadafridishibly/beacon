@@ -16,6 +16,9 @@ type Config struct {
 	GeoIPPath string
 	// TrustedProxies are the networks whose X-Forwarded-For is believed.
 	TrustedProxies []netip.Prefix
+	// ViteURL is the Vite dev server the dashboard loads its CSS and JS
+	// from, set when BEACON_DEV=1. Empty serves the embedded build.
+	ViteURL string
 }
 
 func Load() (Config, error) {
@@ -23,6 +26,9 @@ func Load() (Config, error) {
 		DatabaseURL: env("BEACON_DATABASE_URL", "postgres://localhost:5432/beacon?sslmode=disable"),
 		Listen:      env("BEACON_LISTEN", "127.0.0.1:8080"),
 		GeoIPPath:   os.Getenv("BEACON_GEOIP_DB"),
+	}
+	if os.Getenv("BEACON_DEV") == "1" {
+		c.ViteURL = env("BEACON_VITE_URL", "http://localhost:8341")
 	}
 	for _, s := range strings.Split(os.Getenv("BEACON_TRUSTED_PROXIES"), ",") {
 		s = strings.TrimSpace(s)
