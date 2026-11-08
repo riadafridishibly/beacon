@@ -1,0 +1,36 @@
+version: "2"
+overrides:
+  go:
+    rename:
+      os_version: OSVersion
+    overrides:
+      - db_type: timestamptz
+        go_type: time.Time
+      - db_type: timestamptz
+        nullable: true
+        go_type:
+          type: time.Time
+          pointer: true
+      - db_type: text
+        nullable: true
+        go_type:
+          type: string
+          pointer: true
+      - db_type: pg_catalog.float8
+        nullable: true
+        go_type:
+          type: float64
+          pointer: true
+      - db_type: jsonb
+        nullable: true
+        go_type: encoding/json.RawMessage
+sql:
+  - engine: postgresql
+    schema: internal/db/migrations
+    queries: internal/db/queries
+    gen:
+      go:
+        package: db
+        out: internal/db
+        sql_package: pgx/v5
+        emit_empty_slices: true

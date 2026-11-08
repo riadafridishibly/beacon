@@ -1,0 +1,120 @@
+// Package apps manages the applications that send events and their ingest
+// keys.
+package apps
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"errors"
+	"fmt"
+	"regexp"
+	"sync"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/riadafridishibly/beacon/internal/db"
+)
+
+const (
+	keyPrefix = "bk_"
+	cacheTTL  = time.Minute
+	cacheMax  = 10_000
+)
+
+var idPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
+
+// ErrBadID is returned for an app id that isn't lowercase letters, digits
+// and dashes.
+var ErrBadID = errors.New("app id must be 1-63 lowercase letters, digits or dashes, starting with a letter or digit")
+
+// Create adds an app with its first ingest key and returns the key.
+func Create(ctx context.Context, pool *pgxpool.Pool, id, name string) (string, error) {
+	if !idPattern.MatchString(id) {
+		return "", ErrBadID
+	}
+	if name == "" {
+		name = id
+	}
+	var key string
+	err := pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
+		q := db.New(tx)
+		if _, err := q.CreateApp(ctx, db.CreateAppParams{ID: id, Name: name}); err != nil {
+			return fmt.Errorf("create app: %w", err)
+		}
+		var err error
+		key, err = addKey(ctx, q, id)
+		return err
+	})
+	return key, err
+}
+
+// NewKey adds an ingest key to an app and returns it. Older keys keep
+// working.
+func NewKey(ctx context.Context, q *db.Queries, appID string) (string, error) {
+	return addKey(ctx, q, appID)
+}
+
+func addKey(ctx context.Context, q *db.Queries, appID string) (string, error) {
+	key := keyPrefix + rand.Text()
+	_, err := q.CreateAppKey(ctx, db.CreateAppKeyParams{
+		AppID:   appID,
+		KeyHash: hashKey(key),
+		Prefix:  key[:len(keyPrefix)+6],
+	})
+	if err != nil {
+		return "", fmt.Errorf("create key: %w", err)
+	}
+	return key, nil
+}
+
+func hashKey(key string) []byte {
+	h := sha256.Sum256([]byte(key))
+	return h[:]
+}
+
+// Resolver maps ingest keys to app ids. It caches answers, including
+// unknown keys, for a minute, so a revoked key can work for up to a minute.
+type Resolver struct {
+	q     *db.Queries
+	mu    sync.Mutex
+	cache map[string]cached
+}
+
+type cached struct {
+	appID   string
+	expires time.Time
+}
+
+func NewResolver(q *db.Queries) *Resolver {
+	return &Resolver{q: q, cache: map[string]cached{}}
+}
+
+// App returns the app id for key, or "" for an unknown or revoked key.
+func (r *Resolver) App(ctx context.Context, key string) (string, error) {
+	h := hashKey(key)
+	now := time.Now()
+	r.mu.Lock()
+	c, ok := r.cache[string(h)]
+	r.mu.Unlock()
+	if ok && now.Before(c.expires) {
+		return c.appID, nil
+	}
+
+	appID, err := r.q.AppForKey(ctx, h)
+	if errors.Is(err, pgx.ErrNoRows) {
+		appID, err = "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	r.mu.Lock()
+	if len(r.cache) >= cacheMax {
+		clear(r.cache)
+	}
+	r.cache[string(h)] = cached{appID: appID, expires: now.Add(cacheTTL)}
+	r.mu.Unlock()
+	return appID, nil
+}

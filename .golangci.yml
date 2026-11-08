@@ -1,0 +1,25 @@
+version: "2"
+
+linters:
+  enable:
+    - bodyclose
+    - errorlint
+    - misspell
+    - nilerr
+    - unconvert
+    - usestdlibvars
+  exclusions:
+    generated: lax
+    presets:
+      - std-error-handling
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/riadafridishibly/beacon
+  exclusions:
+    generated: lax
