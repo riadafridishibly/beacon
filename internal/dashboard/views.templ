@@ -8,19 +8,19 @@ import (
 templ appListPage(nav *web.Nav, list []db.AppSummariesRow) {
 	@web.Layout("Apps", nav) {
 		@web.PageHeader("Apps") {
-			<a href="/apps/new" class={ web.ButtonClass, "btn-sm" }>New app</a>
+			<a href="/new-app" class={ web.ButtonClass, "btn-sm" }>New app</a>
 		}
 		if len(list) == 0 {
 			<div class={ web.PaddedCardClass, "text-center" }>
 				<p class="mb-4 opacity-70">No apps yet. Create one to get an ingest key.</p>
-				<a href="/apps/new" class={ web.ButtonClass }>New app</a>
+				<a href="/new-app" class={ web.ButtonClass }>New app</a>
 			</div>
 		} else {
 			<p class="mb-3 text-sm opacity-70">Last 24 hours</p>
 			<ul class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
 				for _, a := range list {
 					<li class={ web.PaddedCardClass }>
-						<h2 class="text-lg font-semibold wrap-break-word">{ a.Name }</h2>
+						<h2 class="text-lg font-semibold wrap-break-word"><a href={ templ.SafeURL("/apps/" + a.ID) } class="link-hover">{ a.Name }</a></h2>
 						<p class="mb-4 font-mono text-xs opacity-60">{ a.ID }</p>
 						<dl class="grid grid-cols-3 gap-2">
 							@stat("Events", a.Events, false)

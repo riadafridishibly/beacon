@@ -102,6 +102,17 @@ func (q *Queries) CreateAppKey(ctx context.Context, arg CreateAppKeyParams) (int
 	return id, err
 }
 
+const getApp = `-- name: GetApp :one
+SELECT id, name, created_at FROM apps WHERE id = $1
+`
+
+func (q *Queries) GetApp(ctx context.Context, id string) (App, error) {
+	row := q.db.QueryRow(ctx, getApp, id)
+	var i App
+	err := row.Scan(&i.ID, &i.Name, &i.CreatedAt)
+	return i, err
+}
+
 const listApps = `-- name: ListApps :many
 SELECT id, name, created_at FROM apps ORDER BY id
 `

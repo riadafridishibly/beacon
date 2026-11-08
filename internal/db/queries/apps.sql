@@ -22,3 +22,6 @@ FROM apps a
 LEFT JOIN events e ON e.app_id = a.id AND e.ts >= @since
 GROUP BY a.id
 ORDER BY a.id;
+
+-- name: GetApp :one
+SELECT * FROM apps WHERE id = @id;
