@@ -50,6 +50,7 @@ fmt: ## Format Go, templ and TypeScript
 test: ## Go tests (need PostgreSQL, see BEACON_TEST_DATABASE_URL)
 	go test ./...
 	cd client/go && go test -race ./...
+	pnpm run test:client
 
 check: gen ## Everything that must pass before work is done
 	go tool templ fmt -fail .
@@ -58,6 +59,8 @@ check: gen ## Everything that must pass before work is done
 	go test ./...
 	cd client/go && go vet ./... && $(GOLANGCI_LINT) run && go test -race ./...
 	pnpm run check
+	pnpm run test:client
+	pnpm run build:client
 	pnpm run build
 
 frontend: ## Build the frontend into internal/web/dist for embedding

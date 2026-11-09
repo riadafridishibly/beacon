@@ -25,6 +25,7 @@ the repo. Don't add docs files.
 cmd/beacon/          serve, migrate, app create|key|list|revoke, user create|reset
 cmd/seed/            generated demo data for development
 client/go/           Go client, its own module, standard library only, gomobile-bindable
+client/ts/           TypeScript client, no runtime dependencies; storage and gzip are pluggable
 client/conformance/  cases every client and the server must pass
 frontend/src/        main.ts (htmx setup), app.css (Tailwind + daisyUI theme)
 internal/config/     BEACON_* environment
