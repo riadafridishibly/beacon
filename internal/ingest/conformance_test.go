@@ -28,18 +28,18 @@ func TestConformanceEvents(t *testing.T) {
 	t.Parallel()
 	_, h, key := setup(t)
 	var cases []struct {
-		Name      string         `json:"name"`
-		Event     map[string]any `json:"event"`
-		PropsSize int            `json:"props_size"`
-		Valid     bool           `json:"valid"`
+		Name      string                     `json:"name"`
+		Event     map[string]json.RawMessage `json:"event"`
+		PropsSize int                        `json:"props_size"`
+		Valid     bool                       `json:"valid"`
 	}
 	readFixture(t, "events.json", &cases)
 
 	for _, tt := range cases {
 		if tt.PropsSize > 0 {
-			tt.Event["props"] = map[string]string{"p": strings.Repeat("a", tt.PropsSize-len(`{"p":""}`))}
+			tt.Event["props"] = json.RawMessage(`{"p":"` + strings.Repeat("a", tt.PropsSize-len(`{"p":""}`)) + `"}`)
 		}
-		body, err := json.Marshal(map[string]any{"events": []any{tt.Event}})
+		body, err := json.Marshal(map[string]any{"events": []map[string]json.RawMessage{tt.Event}})
 		if err != nil {
 			t.Fatal(err)
 		}

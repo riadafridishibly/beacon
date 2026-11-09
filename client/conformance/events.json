@@ -290,5 +290,135 @@
       "props": 1
     },
     "valid": false
+  },
+  {
+    "name": "NUL in device_id",
+    "event": {
+      "device_id": "a\u0000b",
+      "name": "x"
+    },
+    "valid": false
+  },
+  {
+    "name": "NUL in user_id",
+    "event": {
+      "device_id": "d",
+      "name": "x",
+      "user_id": "a\u0000b"
+    },
+    "valid": false
+  },
+  {
+    "name": "NUL in session_id",
+    "event": {
+      "device_id": "d",
+      "name": "x",
+      "session_id": "a\u0000b"
+    },
+    "valid": false
+  },
+  {
+    "name": "NUL in app_version",
+    "event": {
+      "device_id": "d",
+      "name": "x",
+      "app_version": "a\u0000b"
+    },
+    "valid": false
+  },
+  {
+    "name": "NUL in platform",
+    "event": {
+      "device_id": "d",
+      "name": "x",
+      "platform": "a\u0000b"
+    },
+    "valid": false
+  },
+  {
+    "name": "NUL in os_version",
+    "event": {
+      "device_id": "d",
+      "name": "x",
+      "os_version": "a\u0000b"
+    },
+    "valid": false
+  },
+  {
+    "name": "NUL in props value",
+    "event": {
+      "device_id": "d",
+      "name": "x",
+      "props": {
+        "p": "a\u0000b"
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "NUL in props key",
+    "event": {
+      "device_id": "d",
+      "name": "x",
+      "props": {
+        "p\u0000": 1
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "unpaired high surrogate in props",
+    "event": {
+      "device_id": "d",
+      "name": "x",
+      "props": {
+        "p": "\ud800"
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "unpaired low surrogate in props",
+    "event": {
+      "device_id": "d",
+      "name": "x",
+      "props": {
+        "p": "\udc00"
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "high surrogate before another character",
+    "event": {
+      "device_id": "d",
+      "name": "x",
+      "props": {
+        "p": "\ud800a"
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "surrogate pair in props",
+    "event": {
+      "device_id": "d",
+      "name": "x",
+      "props": {
+        "p": "\ud83d\ude00"
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "escaped backslash before u0000",
+    "event": {
+      "device_id": "d",
+      "name": "x",
+      "props": {
+        "p": "a\\u0000"
+      }
+    },
+    "valid": true
   }
 ]

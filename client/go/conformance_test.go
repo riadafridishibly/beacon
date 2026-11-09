@@ -31,7 +31,7 @@ func TestConformanceEvents(t *testing.T) {
 		Valid     bool   `json:"valid"`
 	}
 	readFixture(t, "events.json", &cases)
-	allowed := map[string]bool{"p": true, "cold": true}
+	allowed := map[string]bool{"p": true, "p\x00": true, "cold": true}
 
 	for _, tt := range cases {
 		props := string(tt.Event.Props)

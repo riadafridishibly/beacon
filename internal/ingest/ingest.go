@@ -17,6 +17,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/riadafridishibly/beacon/internal/db"
 	"github.com/riadafridishibly/beacon/internal/geo"
@@ -133,6 +136,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		rows[i] = row
 	}
 	if _, err := h.DB.InsertEvents(r.Context(), rows); err != nil {
+		// A value toRow can't foresee, such as a number too large for jsonb.
+		// A 500 would make the client resend this batch forever.
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && strings.HasPrefix(pgErr.Code, "22") {
+			slog.WarnContext(r.Context(), "rejected batch", "app", appID, "err", err)
+			writeError(w, http.StatusBadRequest, "batch contains a value that can't be stored", -1)
+			return
+		}
 		slog.ErrorContext(r.Context(), "insert events", "app", appID, "err", err)
 		writeError(w, http.StatusInternalServerError, "internal error", -1)
 		return
@@ -220,6 +231,8 @@ func toRow(appID string, shared Fields, e Event, now time.Time) (db.InsertEvents
 		return db.InsertEventsParams{}, fmt.Errorf("user_id must be at most %d bytes", maxUserLen)
 	case len(f.AppVersion) > maxAttrLen || len(f.Platform) > maxAttrLen || len(f.OSVersion) > maxAttrLen:
 		return db.InsertEventsParams{}, fmt.Errorf("app_version, platform and os_version must be at most %d bytes", maxAttrLen)
+	case hasNUL(f.DeviceID, f.UserID, f.SessionID, f.AppVersion, f.Platform, f.OSVersion):
+		return db.InsertEventsParams{}, errors.New("device_id, user_id, session_id, app_version, platform and os_version must not contain NUL")
 	}
 
 	props := e.Props
@@ -232,6 +245,9 @@ func toRow(appID string, shared Fields, e Event, now time.Time) (db.InsertEvents
 		}
 		if len(props) > maxProps {
 			return db.InsertEventsParams{}, fmt.Errorf("props must be at most %d bytes", maxProps)
+		}
+		if !storableJSON(props) {
+			return db.InsertEventsParams{}, errors.New(`props must be valid UTF-8, without \u0000 or unpaired surrogates`)
 		}
 	}
 
@@ -255,6 +271,59 @@ func toRow(appID string, shared Fields, e Event, now time.Time) (db.InsertEvents
 		Value:      e.Value,
 		Props:      props,
 	}, nil
+}
+
+// storableJSON reports whether valid JSON can be stored as jsonb, which
+// refuses \u0000, unpaired surrogates and invalid UTF-8.
+func storableJSON(b []byte) bool {
+	if !utf8.Valid(b) {
+		return false
+	}
+	for i := 0; i+1 < len(b); i++ {
+		if b[i] != '\\' {
+			continue
+		}
+		i++
+		if b[i] != 'u' {
+			continue
+		}
+		r, ok := hex4(b[i+1:])
+		if !ok {
+			return false
+		}
+		i += 4
+		switch {
+		case r == 0 || (r >= 0xDC00 && r <= 0xDFFF):
+			return false
+		case r >= 0xD800 && r <= 0xDBFF:
+			if i+2 >= len(b) || b[i+1] != '\\' || b[i+2] != 'u' {
+				return false
+			}
+			low, ok := hex4(b[i+3:])
+			if !ok || low < 0xDC00 || low > 0xDFFF {
+				return false
+			}
+			i += 6
+		}
+	}
+	return true
+}
+
+func hex4(b []byte) (uint64, bool) {
+	if len(b) < 4 {
+		return 0, false
+	}
+	r, err := strconv.ParseUint(string(b[:4]), 16, 16)
+	return r, err == nil
+}
+
+func hasNUL(fields ...string) bool {
+	for _, f := range fields {
+		if strings.IndexByte(f, 0) >= 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // clientAddr is the address RealIP left in RemoteAddr. The address itself

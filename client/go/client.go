@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"net/http"
 	"net/url"
@@ -60,7 +61,8 @@ type Config struct {
 	Dir string
 
 	AppVersion string
-	// Platform defaults to the Go GOOS value.
+	// Platform defaults to the operating system: macos, windows, linux, ios
+	// or android.
 	Platform  string
 	OSVersion string
 
@@ -138,7 +140,7 @@ func NewClient(cfg *Config) (*Client, error) {
 		key:        cfg.Key,
 		http:       &http.Client{Timeout: requestTimeout},
 		log:        cfg.Log,
-		allowed:    cfg.allowed,
+		allowed:    maps.Clone(cfg.allowed),
 		now:        cfg.now,
 		newID:      cfg.newID,
 		started:    processStart,
@@ -147,7 +149,7 @@ func NewClient(cfg *Config) (*Client, error) {
 		minBackoff: or(cfg.minBackoff, defaultMinBackoff),
 		maxBackoff: or(cfg.maxBackoff, defaultMaxBackoff),
 		appVersion: cfg.AppVersion,
-		platform:   or(cfg.Platform, runtime.GOOS),
+		platform:   or(cfg.Platform, platformName(runtime.GOOS)),
 		osVersion:  cfg.OSVersion,
 		ctx:        ctx,
 		cancel:     cancel,
@@ -401,6 +403,14 @@ func loadDeviceID(dir string, newID func() string) (string, error) {
 		return "", err
 	}
 	return id, nil
+}
+
+// platformName matches the names the TypeScript client sends.
+func platformName(goos string) string {
+	if goos == "darwin" {
+		return "macos"
+	}
+	return goos
 }
 
 func randomID() string {

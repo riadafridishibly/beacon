@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"math/rand/v2"
 	"net/http"
@@ -12,7 +13,7 @@ import (
 	"time"
 )
 
-const maxRetryAfter = time.Hour
+const maxRetryAfterSeconds = 3600
 
 type action string
 
@@ -52,8 +53,12 @@ func classify(status int, retryAfter string, body []byte) outcome {
 		}
 		return outcome{action: actionDropBatch}
 	case http.StatusTooManyRequests:
-		if secs, err := strconv.Atoi(retryAfter); err == nil && secs > 0 {
-			return outcome{action: actionRetryAfter, wait: min(time.Duration(secs)*time.Second, maxRetryAfter)}
+		secs, err := strconv.ParseUint(retryAfter, 10, 64)
+		if errors.Is(err, strconv.ErrRange) || (err == nil && secs >= maxRetryAfterSeconds) {
+			return outcome{action: actionRetryAfter, wait: maxRetryAfterSeconds * time.Second}
+		}
+		if err == nil && secs > 0 {
+			return outcome{action: actionRetryAfter, wait: time.Duration(secs) * time.Second}
 		}
 	}
 	return outcome{action: actionBackoff}

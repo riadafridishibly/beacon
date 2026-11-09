@@ -356,6 +356,28 @@ func TestPropsMustBeAllowed(t *testing.T) {
 	}
 }
 
+func TestAllowPropAfterNewClientHasNoEffect(t *testing.T) {
+	t.Parallel()
+	srv := newServer(t)
+	cfg := srv.config(t)
+	c := newClient(t, cfg)
+	cfg.AllowProp("late")
+	must(t, c.Track("x", `{"late":1}`))
+	must(t, c.Close())
+	if events := decodeEvents(t, srv.wait(t, 1)); events[0].Props != nil {
+		t.Errorf("props %s", events[0].Props)
+	}
+}
+
+func TestPlatformDefault(t *testing.T) {
+	t.Parallel()
+	for goos, want := range map[string]string{"darwin": "macos", "windows": "windows", "linux": "linux", "ios": "ios", "android": "android"} {
+		if got := platformName(goos); got != want {
+			t.Errorf("%s: %s, want %s", goos, got, want)
+		}
+	}
+}
+
 func TestUserIDIsOptIn(t *testing.T) {
 	t.Parallel()
 	srv := newServer(t)

@@ -48,6 +48,36 @@
     "wait_seconds": 3600
   },
   {
+    "name": "Retry-After too large for 64 bits of nanoseconds",
+    "status": 429,
+    "retry_after": "10000000000",
+    "body": "",
+    "action": "retry_after",
+    "wait_seconds": 3600
+  },
+  {
+    "name": "Retry-After too large for 64 bits",
+    "status": 429,
+    "retry_after": "99999999999999999999999",
+    "body": "",
+    "action": "retry_after",
+    "wait_seconds": 3600
+  },
+  {
+    "name": "Retry-After with a sign",
+    "status": 429,
+    "retry_after": "+7",
+    "body": "",
+    "action": "backoff"
+  },
+  {
+    "name": "Retry-After of zero",
+    "status": 429,
+    "retry_after": "0",
+    "body": "",
+    "action": "backoff"
+  },
+  {
     "name": "rate limited with no Retry-After",
     "status": 429,
     "body": "",
