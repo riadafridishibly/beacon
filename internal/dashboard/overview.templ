@@ -25,6 +25,8 @@ templ appHeader(app db.App, current string) {
 	<nav aria-label="App pages" class="tabs tabs-border -mt-2 mb-6 -ml-3">
 		@appTab("Overview", "/apps/"+app.ID, current == "overview")
 		@appTab("Events", eventsURL(app.ID, eventFilter{}, ""), current == "events")
+		@appTab("Users", subjectsURL(app.ID, userSubject, ""), current == "users")
+		@appTab("Devices", subjectsURL(app.ID, deviceSubject, ""), current == "devices")
 	</nav>
 }
 

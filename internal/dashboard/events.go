@@ -22,6 +22,9 @@ const (
 	eventTimeUTC   = "2006-01-02 15:04:05.000 UTC"
 )
 
+// farFuture is the cursor of a first page: every row sorts before it.
+var farFuture = time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)
+
 // eventFilter holds the exact values a list is narrowed to; empty means any.
 type eventFilter struct {
 	Name, Device, User, Country, Version string
@@ -41,10 +44,14 @@ func parseEventFilter(q url.Values) eventFilter {
 // can hold them.
 func cleanFilter(s string) string {
 	s = strings.TrimSpace(s)
-	if !utf8.ValidString(s) || strings.ContainsRune(s, 0) {
+	if !validText(s) {
 		return ""
 	}
 	return s
+}
+
+func validText(s string) bool {
+	return utf8.ValidString(s) && !strings.ContainsRune(s, 0)
 }
 
 func eventsURL(appID string, f eventFilter, before string) string {
@@ -103,9 +110,9 @@ type eventRow struct {
 }
 
 // eventField is one line of an expanded row. Filter, when set, is the URL of
-// the list narrowed to this value.
+// the list narrowed to this value, and Timeline the page of this device or user.
 type eventField struct {
-	Label, Value, Filter string
+	Label, Value, Filter, Timeline string
 }
 
 func (d *dashboard) events(w http.ResponseWriter, r *http.Request) error {
@@ -127,12 +134,29 @@ func (d *dashboard) loadEvents(ctx context.Context, appID string, f eventFilter,
 	if err != nil {
 		return eventsView{}, err
 	}
+	rows, before, older, err := d.eventPage(ctx, appID, f, before)
+	if err != nil {
+		return eventsView{}, err
+	}
+	v := eventsView{App: app, Filter: f, Before: before}
+	if older != "" {
+		v.Older = eventsURL(appID, f, older)
+	}
+	for _, e := range rows {
+		v.Rows = append(v.Rows, newEventRow(appID, f, e))
+	}
+	return v, nil
+}
+
+// eventPage reads one page of events, newest first. It returns before
+// emptied if the cursor wasn't valid, and older as the cursor of the next
+// page, empty on the last.
+func (d *dashboard) eventPage(ctx context.Context, appID string, f eventFilter, before string) (rows []db.Event, validBefore, older string, err error) {
 	beforeTS, beforeID, ok := parseEventCursor(before)
 	if !ok {
-		before = ""
-		beforeTS, beforeID = time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC), math.MaxInt64
+		before, beforeTS, beforeID = "", farFuture, math.MaxInt64
 	}
-	rows, err := d.q.ListEvents(ctx, db.ListEventsParams{
+	rows, err = d.q.ListEvents(ctx, db.ListEventsParams{
 		AppID:      appID,
 		BeforeTs:   beforeTS,
 		BeforeID:   beforeID,
@@ -144,17 +168,13 @@ func (d *dashboard) loadEvents(ctx context.Context, appID string, f eventFilter,
 		PageLimit:  eventsPageSize + 1,
 	})
 	if err != nil {
-		return eventsView{}, err
+		return nil, "", "", err
 	}
-	v := eventsView{App: app, Filter: f, Before: before}
 	if len(rows) > eventsPageSize {
 		rows = rows[:eventsPageSize]
-		v.Older = eventsURL(appID, f, eventCursor(rows[eventsPageSize-1]))
+		older = eventCursor(rows[eventsPageSize-1])
 	}
-	for _, e := range rows {
-		v.Rows = append(v.Rows, newEventRow(appID, f, e))
-	}
-	return v, nil
+	return rows, before, older, nil
 }
 
 func optional(s string) *string {
@@ -197,7 +217,11 @@ func newEventRow(appID string, f eventFilter, e db.Event) eventRow {
 	add("Time", e.Ts.UTC().Format(eventTimeUTC), nil)
 	add("Received", e.ReceivedAt.UTC().Format(eventTimeUTC), nil)
 	add("Device", e.DeviceID, func(g *eventFilter, v string) { g.Device = v })
+	r.Fields[len(r.Fields)-1].Timeline = subjectURL(appID, deviceSubject, e.DeviceID, "")
 	add("User", r.User, func(g *eventFilter, v string) { g.User = v })
+	if r.User != "" {
+		r.Fields[len(r.Fields)-1].Timeline = subjectURL(appID, userSubject, r.User, "")
+	}
 	add("Session", deref(e.SessionID), nil)
 	add("Country", r.Country, func(g *eventFilter, v string) { g.Country = v })
 	add("City", deref(e.City), nil)
