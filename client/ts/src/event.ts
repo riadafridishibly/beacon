@@ -6,9 +6,13 @@ const maxUserLen = 256;
 const maxAttrLen = 64;
 const maxProps = 16 << 10;
 
+// Keeps an error message within maxProps even if JSON escaping grows every
+// byte to six.
+const maxMessage = 2 << 10;
+
 const namePattern = /^[a-z0-9_]+(\.[a-z0-9_]+)*$/;
 
-/** Props is the JSON object an event carries beside its one numeric value. */
+/** Props is the JSON object an event carries beside its one numeric value. A top-level Error is sent as its message. */
 export type Props = Record<string, unknown>;
 
 /** WireEvent is one event as the server receives it. */
@@ -117,6 +121,31 @@ function over(s: string | undefined, limit: number): boolean {
   return s !== undefined && byteLength(s) > limit;
 }
 
+/** cleanMessage makes error text safe to store, so that a long or malformed message can't cost the event. */
+export function cleanMessage(message: unknown): string {
+  const text = message instanceof Error ? message.message : String(message ?? "");
+  let out = "";
+  let size = 0;
+  for (const ch of text) {
+    if (ch === "\0") continue;
+    const c = ch.length === 1 && ch >= "\ud800" && ch <= "\udfff" ? "�" : ch;
+    size += byteLength(c);
+    if (size > maxMessage) break;
+    out += c;
+  }
+  return out;
+}
+
+/**
+ * withMessage returns props with its message key set, unless message is empty.
+ * Props that filterProps refuses are returned for it to report.
+ */
+export function withMessage(props: unknown, message: string): unknown {
+  const isObject = typeof props === "object" && !Array.isArray(props);
+  if (message === "" || !(isObject || props === undefined)) return props;
+  return { ...(props as Props | null | undefined), message };
+}
+
 /** filterProps keeps the allowed keys of an object and returns the names of the others. */
 export function filterProps(
   props: unknown,
@@ -129,7 +158,7 @@ export function filterProps(
   const kept: Props = {};
   const dropped: string[] = [];
   for (const [k, v] of Object.entries(props)) {
-    if (allowed.has(k)) kept[k] = v;
+    if (allowed.has(k)) kept[k] = v instanceof Error ? cleanMessage(v) : v;
     else dropped.push(k);
   }
   return Object.keys(kept).length > 0 ? { props: kept, dropped } : { dropped };

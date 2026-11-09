@@ -1,4 +1,12 @@
-import { BeaconError, filterProps, type Props, validate, type WireEvent } from "./event.ts";
+import {
+  BeaconError,
+  cleanMessage,
+  filterProps,
+  type Props,
+  validate,
+  type WireEvent,
+  withMessage,
+} from "./event.ts";
 import { Queue, type Segment, type Store } from "./queue.ts";
 import { backoffDelay, classify } from "./send.ts";
 
@@ -134,9 +142,22 @@ export class Client {
     this.userId = id;
   }
 
-  /** track queues an event. It throws if the server would reject it. */
+  /**
+   * track queues an event. It throws if the server would reject it. Report
+   * errors with trackError: the dashboard counts only names starting "error.".
+   */
   track(name: string, props?: Props): void {
     this.trackEvent(name, undefined, props);
+  }
+
+  /**
+   * trackError queues error.<area>, counted as an error by the dashboard. A
+   * non-empty message, cut to 2 KiB, replaces props.message if allowed.
+   */
+  trackError(area: string, message: string, props?: Props): void {
+    // A message that isn't allowed stays out of props, or every error would log a drop.
+    const clean = this.allowed.has("message") ? cleanMessage(message) : "";
+    this.trackEvent(`error.${area}`, undefined, withMessage(props, clean));
   }
 
   /** trackValue queues an event with its one numeric measure, such as a duration in ms. */

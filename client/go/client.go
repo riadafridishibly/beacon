@@ -1,7 +1,5 @@
 // Package beacon sends telemetry events to a beacon server. Events wait in
 // an on-disk queue and go out in gzipped batches.
-//
-// The exported API that apps need uses only types gomobile can bind.
 package beacon
 
 import (
@@ -38,18 +36,11 @@ const (
 	maxBatchBytes = 900 << 10
 )
 
-// processStart is the closest a Go package can get to process start. In a
-// gomobile library it is when the library loads, so apps there should set
-// Config.ProcessStartUnixMs.
+// processStart is the closest a Go package can get to process start.
 var processStart = time.Now()
 
 // ErrClosed is returned after Close.
 var ErrClosed = errors.New("beacon: client closed")
-
-// Logger receives messages about delivery problems and dropped data.
-type Logger interface {
-	Log(message string)
-}
 
 // Config configures a Client. Endpoint, Key and Dir are required.
 type Config struct {
@@ -69,12 +60,14 @@ type Config struct {
 	// MaxQueueBytes caps the queue on disk, 10 MiB by default. Past it the
 	// oldest events are dropped.
 	MaxQueueBytes int64
-	// ProcessStartUnixMs overrides the time AppOpened measures from.
-	ProcessStartUnixMs int64
-	// Log is optional. It must not call the Client.
-	Log Logger
-
-	allowed map[string]bool
+	// ProcessStart overrides the time AppOpened measures from.
+	ProcessStart time.Time
+	// Log receives messages about delivery problems and dropped data. It is
+	// optional and must not call the Client.
+	Log func(message string)
+	// AllowProps lists the props keys that may leave the app. Others are
+	// dropped.
+	AllowProps []string
 
 	// Set by tests.
 	flushEvery, heartbeatEvery, minBackoff, maxBackoff time.Duration
@@ -83,21 +76,13 @@ type Config struct {
 	newID                                              func() string
 }
 
-// AllowProp permits a props key. Keys that were not allowed are dropped
-// from events passed to Track and TrackValue.
-func (c *Config) AllowProp(key string) {
-	if c.allowed == nil {
-		c.allowed = make(map[string]bool)
-	}
-	c.allowed[key] = true
-}
-
-// Client queues and sends events. Its methods are safe for concurrent use.
+// Client queues and sends events. Its methods are safe for concurrent use,
+// but a Props map must not change during the call it is passed to.
 type Client struct {
 	url, key               string
 	http                   *http.Client
 	q                      *queue
-	log                    Logger
+	log                    func(string)
 	allowed                map[string]bool
 	now                    func() time.Time
 	newID                  func() string
@@ -134,13 +119,18 @@ func NewClient(cfg *Config) (*Client, error) {
 		return nil, fmt.Errorf("beacon: invalid Endpoint %q", cfg.Endpoint)
 	}
 
+	allowed := make(map[string]bool, len(cfg.AllowProps))
+	for _, key := range cfg.AllowProps {
+		allowed[key] = true
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &Client{
 		url:        strings.TrimRight(cfg.Endpoint, "/") + "/v1/events",
 		key:        cfg.Key,
 		http:       &http.Client{Timeout: requestTimeout},
 		log:        cfg.Log,
-		allowed:    maps.Clone(cfg.allowed),
+		allowed:    allowed,
 		now:        cfg.now,
 		newID:      cfg.newID,
 		started:    processStart,
@@ -163,8 +153,8 @@ func NewClient(cfg *Config) (*Client, error) {
 	if c.newID == nil {
 		c.newID = randomID
 	}
-	if cfg.ProcessStartUnixMs != 0 {
-		c.started = time.UnixMilli(cfg.ProcessStartUnixMs)
+	if !cfg.ProcessStart.IsZero() {
+		c.started = cfg.ProcessStart
 	}
 
 	fail := func(err error) (*Client, error) {
@@ -201,26 +191,42 @@ func (c *Client) SetUserID(id string) {
 	c.userID = id
 }
 
-// Track queues an event. propsJSON is a JSON object, or "" for none.
-func (c *Client) Track(name, propsJSON string) error {
-	return c.track(name, nil, propsJSON)
+// Track queues an event. props may be nil. Report errors with TrackError: the
+// dashboard counts only names starting "error.".
+func (c *Client) Track(name string, props Props) error {
+	return c.track(name, nil, props)
+}
+
+// TrackError queues error.<area>, counted as an error by the dashboard. A
+// non-empty message, cut to 2 KiB, replaces props["message"] if allowed.
+func (c *Client) TrackError(area, message string, props Props) error {
+	// A message that isn't allowed stays out of props, or every error would
+	// log a drop.
+	if message = cleanMessage(message); message != "" && c.allowed["message"] {
+		props = maps.Clone(props)
+		if props == nil {
+			props = Props{}
+		}
+		props["message"] = message
+	}
+	return c.track("error."+area, nil, props)
 }
 
 // TrackValue queues an event with its one numeric measure, such as a
 // duration in milliseconds.
-func (c *Client) TrackValue(name string, value float64, propsJSON string) error {
-	return c.track(name, &value, propsJSON)
+func (c *Client) TrackValue(name string, value float64, props Props) error {
+	return c.track(name, &value, props)
 }
 
-func (c *Client) track(name string, value *float64, propsJSON string) error {
-	props, dropped, err := filterProps(propsJSON, c.allowed)
+func (c *Client) track(name string, value *float64, props Props) error {
+	encoded, dropped, err := filterProps(props, c.allowed)
 	if err != nil {
 		return err
 	}
 	if len(dropped) > 0 {
 		c.logf("%s: dropped props not allowed: %s", name, strings.Join(dropped, ", "))
 	}
-	return c.enqueue(name, value, props)
+	return c.enqueue(name, value, encoded)
 }
 
 // AppOpened records app.open once per process, with the time since process
@@ -379,9 +385,13 @@ func (c *Client) run() {
 }
 
 func (c *Client) logf(format string, args ...any) {
-	if c.log != nil {
-		c.log.Log("beacon: " + fmt.Sprintf(format, args...))
+	if c.log == nil {
+		return
 	}
+	// Most logging happens on the background goroutine, where a panic would
+	// end the app.
+	defer func() { _ = recover() }()
+	c.log("beacon: " + fmt.Sprintf(format, args...))
 }
 
 // loadDeviceID returns the id stored in dir, creating it on first use. It

@@ -22,7 +22,15 @@ const (
 	maxProps   = 16 << 10
 )
 
+// maxMessage keeps an error message within maxProps even if JSON escaping
+// grows every byte to six.
+const maxMessage = 2 << 10
+
 var namePattern = regexp.MustCompile(`^[a-z0-9_]+(\.[a-z0-9_]+)*$`)
+
+// Props is the JSON object an event carries beside its one numeric value. A
+// top-level error value is sent as its text.
+type Props map[string]any
 
 type event struct {
 	Name       string          `json:"name"`
@@ -128,26 +136,53 @@ func marshal(v any) ([]byte, error) {
 	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
 }
 
-// filterProps keeps the allowed keys of a JSON object and returns the names
-// of the others.
-func filterProps(propsJSON string, allowed map[string]bool) (json.RawMessage, []string, error) {
-	if propsJSON == "" {
-		return nil, nil, nil
+// cleanMessage makes error text safe to store, so that a long or binary
+// message can't cost the event.
+func cleanMessage(s string) string {
+	s = strings.ToValidUTF8(strings.ReplaceAll(s, "\x00", ""), "�")
+	if len(s) <= maxMessage {
+		return s
 	}
-	var props map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(propsJSON), &props); err != nil {
-		return nil, nil, errors.New("beacon: props must be a JSON object")
+	n := maxMessage
+	for !utf8.RuneStart(s[n]) {
+		n--
 	}
+	return s[:n]
+}
+
+// encodable returns the text of an error, which encoding/json would write as
+// {}. If Error panics, as it can on a nil pointer, v stays as it is.
+func encodable(v any) (out any) {
+	err, ok := v.(error)
+	if !ok {
+		return v
+	}
+	defer func() {
+		if recover() != nil {
+			out = v
+		}
+	}()
+	return cleanMessage(err.Error())
+}
+
+// filterProps encodes the allowed keys of props and returns the names of the
+// others. It leaves props unchanged because the map is the caller's.
+func filterProps(props Props, allowed map[string]bool) (json.RawMessage, []string, error) {
+	kept := make(Props, len(props))
 	var dropped []string
-	for k := range props {
-		if !allowed[k] {
+	for k, v := range props {
+		if allowed[k] {
+			kept[k] = encodable(v)
+		} else {
 			dropped = append(dropped, k)
-			delete(props, k)
 		}
 	}
-	if len(props) == 0 {
+	if len(kept) == 0 {
 		return nil, dropped, nil
 	}
-	b, err := marshal(props)
-	return b, dropped, err
+	b, err := marshal(kept)
+	if err != nil {
+		return nil, dropped, fmt.Errorf("beacon: props: %w", err)
+	}
+	return b, dropped, nil
 }
