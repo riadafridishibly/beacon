@@ -1,0 +1,178 @@
+package dashboard
+
+import (
+	"strconv"
+	"strings"
+
+	"github.com/riadafridishibly/beacon/internal/web"
+)
+
+const catalogColumns = "grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-0.5 px-4 sm:grid-cols-[minmax(0,16rem)_5rem_5.5rem_minmax(0,1fr)]"
+
+templ catalogPage(nav *web.Nav, v catalogView) {
+	@web.Layout("Catalog · "+v.App.Name, nav) {
+		@appHeader(v.App, "catalog")
+		<div id="catalog" class="transition-opacity [&.htmx-request]:opacity-60">
+			@catalogBody(v)
+		</div>
+	}
+}
+
+// catalogBody is the part a page change replaces.
+templ catalogBody(v catalogView) {
+	if len(v.Rows) == 0 {
+		<div class={ web.PaddedCardClass, "text-center" }>
+			if v.Before == "" {
+				<p class="opacity-70">No events yet.</p>
+			} else {
+				<p class="opacity-70">No more events.</p>
+			}
+		</div>
+	} else {
+		<div class={ web.CardClass, "overflow-hidden" }>
+			<div aria-hidden="true" class={ catalogColumns, "border-b border-base-300 py-2 text-xs opacity-60 max-sm:hidden" }>
+				<span>Event</span>
+				<span class="text-right">Count</span>
+				<span>Last seen</span>
+				<span>Props keys</span>
+			</div>
+			<ul class="divide-y divide-base-300">
+				for _, r := range v.Rows {
+					<li>
+						<a href={ templ.SafeURL(catalogEventURL(v.App.ID, r.Name, "", "")) } class={ catalogColumns, "py-2.5 text-sm hover:bg-base-200" }>
+							<span class={ "truncate font-mono text-xs leading-5", templ.KV("text-error", strings.HasPrefix(r.Name, "error.")) } title={ r.Name }>{ r.Name }</span>
+							<span class="text-right text-xs leading-5 tabular-nums sm:text-sm">{ web.Count(r.Events) }</span>
+							<span class="flex min-w-0 gap-3 text-xs leading-5 max-sm:col-span-2 sm:contents">
+								<time class="whitespace-nowrap opacity-70" title={ utcTime(r.LastSeen) }>{ ago(r.LastSeen, v.Now) }</time>
+								<span class="min-w-0 font-mono wrap-break-word opacity-70">
+									{ strings.Join(r.Keys, ", ") }
+									if r.MoreKeys > 0 {
+										<span class="whitespace-nowrap">+{ strconv.Itoa(r.MoreKeys) } more</span>
+									}
+								</span>
+							</span>
+						</a>
+					</li>
+				}
+			</ul>
+		</div>
+		<p class="mt-2 text-xs opacity-60">Props keys come from each event's latest { web.Count(propKeySample) } rows.</p>
+	}
+	if v.Before != "" || v.Older != "" {
+		<nav aria-label="Pages" hx-boost="true" hx-target="#catalog" hx-indicator="#catalog" class="mt-4 flex justify-end gap-2">
+			if v.Before != "" {
+				<a href={ templ.SafeURL(catalogURL(v.App.ID, "")) } class="btn btn-sm">Most used</a>
+			}
+			if v.Older != "" {
+				<a href={ templ.SafeURL(v.Older) } class="btn btn-sm">Next</a>
+			}
+		</nav>
+	}
+}
+
+templ catalogEventPage(nav *web.Nav, v catalogEventView) {
+	@web.Layout(v.Name+" · "+v.App.Name, nav) {
+		@appHeader(v.App, "catalog")
+		<p class="text-sm opacity-70">
+			<a href={ templ.SafeURL(catalogURL(v.App.ID, "")) } class="link-hover">Catalog</a>
+		</p>
+		<div class="mb-4 flex flex-wrap items-baseline justify-between gap-x-4">
+			<h2 class="font-mono text-lg wrap-anywhere">{ v.Name }</h2>
+			<a href={ templ.SafeURL(eventsURL(v.App.ID, eventFilter{Name: v.Name}, "")) } class="link link-primary link-hover text-sm">Filter in Events</a>
+		</div>
+		<div id="event" class="transition-opacity [&.htmx-request]:opacity-60">
+			@catalogEventBody(v)
+		</div>
+	}
+}
+
+// catalogEventBody is the part a range change replaces.
+templ catalogEventBody(v catalogEventView) {
+	<div class="mb-6 flex flex-wrap items-center gap-x-4 gap-y-2">
+		<div id="event-ranges">
+			@eventRanges(v.Values)
+		</div>
+		<p class="text-sm opacity-60">Daily buckets, UTC</p>
+	</div>
+	if v.Total.Events == 0 {
+		<div class={ web.PaddedCardClass, "text-center" }>
+			<p class="opacity-70">No events in this range. Last seen { ago(v.LastSeen, v.Now) }.</p>
+		</div>
+	} else {
+		<dl class={ web.PaddedCardClass, "mb-4 grid grid-cols-2 gap-x-6 gap-y-3 lg:grid-cols-4" }>
+			@fact("Events", web.Count(v.Total.Events), "")
+			@fact("Last seen", ago(v.LastSeen, v.Now), utcTime(v.LastSeen))
+			if v.hasValues() {
+				@fact("Value p50", formatNumber(v.Total.P50), "")
+				@fact("Value p95", formatNumber(v.Total.P95), "")
+			}
+		</dl>
+		<div class="grid gap-4 lg:grid-cols-2">
+			<div class={ "grid min-w-0", templ.KV("lg:col-span-2", !v.hasValues()) }>
+				@chartCard(v.Count)
+			</div>
+			if v.hasValues() {
+				@chartCard(v.Value)
+			}
+		</div>
+		<div id={ valuesTarget } class="mt-4 transition-opacity [&.htmx-request]:opacity-60">
+			@propValues(v.Values)
+		</div>
+	}
+}
+
+templ eventRanges(v propValuesView) {
+	@rangePicker(v.Range, "#event", func(rng string) string { return catalogEventURL(v.AppID, v.Name, rng, v.Key) })
+}
+
+// keyChange is the response to choosing a key. The range links carry the key,
+// so they are replaced too.
+templ keyChange(v propValuesView) {
+	@propValues(v)
+	<div id="event-ranges" hx-swap-oob="true">
+		@eventRanges(v)
+	</div>
+}
+
+// propValues is the part choosing a key replaces.
+templ propValues(v propValuesView) {
+	<section class={ web.PaddedCardClass, "min-w-0" }>
+		<h2 class="font-semibold">Top props values</h2>
+		if v.Key == "" {
+			<p class="mt-4 text-sm opacity-60">No events with props in this range.</p>
+		} else {
+			<div class="mt-3 flex flex-wrap gap-1.5" role="group" aria-label="Props key">
+				for _, k := range v.Keys {
+					<a
+						href={ templ.SafeURL(catalogEventURL(v.AppID, v.Name, v.Range, k)) }
+						hx-get={ catalogEventURL(v.AppID, v.Name, v.Range, k) }
+						hx-target={ "#" + valuesTarget }
+						hx-indicator={ "#" + valuesTarget }
+						hx-push-url="true"
+						if k == v.Key {
+							aria-current="true"
+						}
+						class={ "btn btn-xs max-w-full font-mono font-normal", templ.KV("btn-primary", k == v.Key) }
+					><span class="truncate">{ k }</span></a>
+				}
+			</div>
+			if len(v.Rows) == 0 {
+				<p class="mt-4 text-sm opacity-60">No values for this key in this range.</p>
+			} else {
+				<ul class="mt-4 space-y-3">
+					for _, r := range v.Rows {
+						<li>
+							<div class="mb-1 flex justify-between gap-3 text-sm">
+								<span class="line-clamp-2 min-w-0 wrap-anywhere" title={ r.Label }>{ r.Label }</span>
+								<span class="tabular-nums">{ web.Count(r.Events) }</span>
+							</div>
+							<svg class="h-2 w-full" aria-hidden="true">
+								<rect width={ barWidthPct(r.Events, v.Top) } height="8" rx="4" class="fill-chart-1"></rect>
+							</svg>
+						</li>
+					}
+				</ul>
+			}
+		}
+	</section>
+}

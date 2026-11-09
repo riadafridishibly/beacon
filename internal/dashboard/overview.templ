@@ -22,11 +22,12 @@ templ appHeader(app db.App, current string) {
 		<a href="/" class="link-hover">Apps</a>
 	</nav>
 	@web.PageHeader(app.Name)
-	<nav aria-label="App pages" class="tabs tabs-border -mt-2 mb-6 -ml-3">
+	<nav aria-label="App pages" class="tabs tabs-border -mt-2 mb-6 -ml-3 flex-nowrap overflow-x-auto max-sm:-mx-2">
 		@appTab("Overview", "/apps/"+app.ID, current == "overview")
 		@appTab("Events", eventsURL(app.ID, eventFilter{}, ""), current == "events")
 		@appTab("Users", subjectsURL(app.ID, userSubject, ""), current == "users")
 		@appTab("Devices", subjectsURL(app.ID, deviceSubject, ""), current == "devices")
+		@appTab("Catalog", catalogURL(app.ID, ""), current == "catalog")
 	</nav>
 }
 
@@ -36,30 +37,35 @@ templ appTab(label, href string, active bool) {
 		if active {
 			aria-current="page"
 		}
-		class={ "tab", templ.KV("tab-active", active) }
+		class={ "tab shrink-0 max-sm:px-2", templ.KV("tab-active", active) }
 	>{ label }</a>
 }
 
 func rangeURL(appID, rng string) string { return "/apps/" + appID + "?range=" + rng }
 
+// rangePicker links to each range. Links replace target and stay real URLs.
+templ rangePicker(current, target string, urlFor func(string) string) {
+	<div class="join">
+		for _, rng := range ranges {
+			<a
+				href={ templ.SafeURL(urlFor(rng)) }
+				hx-get={ urlFor(rng) }
+				hx-target={ target }
+				hx-indicator={ target }
+				hx-push-url="true"
+				if rng == current {
+					aria-current="true"
+				}
+				class={ "btn btn-sm join-item", templ.KV("btn-primary", rng == current) }
+			>{ rng }</a>
+		}
+	</div>
+}
+
 // overviewBody is the part a range change replaces.
 templ overviewBody(v overviewView) {
 	<div class="mb-6 flex flex-wrap items-center gap-x-4 gap-y-2">
-		<div class="join">
-			for _, rng := range ranges {
-				<a
-					href={ templ.SafeURL(rangeURL(v.App.ID, rng)) }
-					hx-get={ rangeURL(v.App.ID, rng) }
-					hx-target="#overview"
-					hx-indicator="#overview"
-					hx-push-url="true"
-					if rng == v.Range {
-						aria-current="true"
-					}
-					class={ "btn btn-sm join-item", templ.KV("btn-primary", rng == v.Range) }
-				>{ rng }</a>
-			}
-		</div>
+		@rangePicker(v.Range, "#overview", func(rng string) string { return rangeURL(v.App.ID, rng) })
 		<p class="text-sm opacity-60">Daily buckets, UTC</p>
 	</div>
 	if v.Totals.Events == 0 {

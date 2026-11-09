@@ -1,5 +1,5 @@
 // Package dashboard serves the web UI: sign-in, the app list, creating apps,
-// and each app's overview, events, users and devices.
+// and each app's overview, events, users, devices and event catalog.
 package dashboard
 
 import (
@@ -49,6 +49,8 @@ func New(pool *pgxpool.Pool, cfg Config) (http.Handler, error) {
 	pages.Handle("GET /apps/{id}/device", web.Handle(d.subjectDetail(deviceSubject)))
 	pages.Handle("GET /apps/{id}/users", web.Handle(d.subjectList(userSubject)))
 	pages.Handle("GET /apps/{id}/user", web.Handle(d.subjectDetail(userSubject)))
+	pages.Handle("GET /apps/{id}/catalog", web.Handle(d.catalog))
+	pages.Handle("GET /apps/{id}/catalog/{name}", web.Handle(d.catalogEvent))
 	pages.Handle("POST /apps", web.Handle(d.createApp))
 	pages.Handle("/", web.Handle(func(http.ResponseWriter, *http.Request) error { return web.ErrNotFound }))
 

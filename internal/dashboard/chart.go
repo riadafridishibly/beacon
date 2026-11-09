@@ -73,6 +73,11 @@ var (
 		Tick:  formatMillis,
 		Ticks: func(max float64) []float64 { return niceTicks(max, 1) },
 	}
+	numberFormat = valueFormat{
+		Value: formatNumber,
+		Tick:  formatNumber,
+		Ticks: func(max float64) []float64 { return niceTicks(max, 0.01) },
+	}
 	durationFormat = valueFormat{
 		Value: formatDuration,
 		Tick:  formatDuration,
@@ -376,6 +381,14 @@ func formatMillis(v float64) string {
 		return fmt.Sprintf("%.0f ms", v)
 	}
 	return strconv.FormatFloat(v/1000, 'f', 1, 64) + " s"
+}
+
+// formatNumber is for values whose unit only the client knows.
+func formatNumber(v float64) string {
+	if math.Abs(v) >= 1000 {
+		return web.Count(int64(math.Round(v)))
+	}
+	return strconv.FormatFloat(math.Round(v*100)/100, 'f', -1, 64)
 }
 
 func formatDuration(seconds float64) string {
