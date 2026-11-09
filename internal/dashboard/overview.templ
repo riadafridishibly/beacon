@@ -28,6 +28,7 @@ templ appHeader(app db.App, current string) {
 		@appTab("Users", subjectsURL(app.ID, userSubject, ""), current == "users")
 		@appTab("Devices", subjectsURL(app.ID, deviceSubject, ""), current == "devices")
 		@appTab("Catalog", catalogURL(app.ID, ""), current == "catalog")
+		@appTab("Keys", "/apps/"+app.ID+"/keys", current == "keys")
 	</nav>
 }
 

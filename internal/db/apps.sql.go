@@ -122,6 +122,38 @@ func (q *Queries) GetApp(ctx context.Context, id string) (App, error) {
 	return i, err
 }
 
+const listAppKeys = `-- name: ListAppKeys :many
+SELECT prefix, created_at, revoked_at FROM app_keys
+WHERE app_id = $1
+ORDER BY revoked_at IS NOT NULL, created_at DESC, id DESC
+`
+
+type ListAppKeysRow struct {
+	Prefix    string
+	CreatedAt time.Time
+	RevokedAt *time.Time
+}
+
+func (q *Queries) ListAppKeys(ctx context.Context, appID string) ([]ListAppKeysRow, error) {
+	rows, err := q.db.Query(ctx, listAppKeys, appID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAppKeysRow{}
+	for rows.Next() {
+		var i ListAppKeysRow
+		if err := rows.Scan(&i.Prefix, &i.CreatedAt, &i.RevokedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listApps = `-- name: ListApps :many
 SELECT id, name, created_at FROM apps ORDER BY id
 `
@@ -144,4 +176,17 @@ func (q *Queries) ListApps(ctx context.Context) ([]App, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+const revokeKey = `-- name: RevokeKey :one
+UPDATE app_keys SET revoked_at = coalesce(revoked_at, now())
+WHERE prefix = $1
+RETURNING app_id
+`
+
+func (q *Queries) RevokeKey(ctx context.Context, prefix string) (string, error) {
+	row := q.db.QueryRow(ctx, revokeKey, prefix)
+	var app_id string
+	err := row.Scan(&app_id)
+	return app_id, err
 }

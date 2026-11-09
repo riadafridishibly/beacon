@@ -26,3 +26,24 @@ func TestTrustedProxies(t *testing.T) {
 		t.Error("bad entry: no error")
 	}
 }
+
+func TestIngestKeyRate(t *testing.T) {
+	t.Setenv("BEACON_INGEST_KEY_RATE", "")
+	c, err := Load()
+	if err != nil || c.IngestKeyRate != 50 {
+		t.Errorf("default: %d, %v", c.IngestKeyRate, err)
+	}
+
+	t.Setenv("BEACON_INGEST_KEY_RATE", "200")
+	c, err = Load()
+	if err != nil || c.IngestKeyRate != 200 {
+		t.Errorf("set: %d, %v", c.IngestKeyRate, err)
+	}
+
+	for _, v := range []string{"0", "-1", "many"} {
+		t.Setenv("BEACON_INGEST_KEY_RATE", v)
+		if _, err := Load(); err == nil {
+			t.Errorf("%q: no error", v)
+		}
+	}
+}

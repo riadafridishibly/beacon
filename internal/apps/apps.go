@@ -21,11 +21,17 @@ import (
 
 const (
 	keyPrefix = "bk_"
-	cacheTTL  = time.Minute
-	cacheMax  = 10_000
+	// shownChars is how much of the random part of a key is stored as its
+	// prefix.
+	shownChars = 6
+	cacheTTL   = time.Minute
+	cacheMax   = 10_000
 )
 
-var idPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
+var (
+	idPattern     = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
+	prefixPattern = regexp.MustCompile(fmt.Sprintf(`^%s[A-Z2-7]{%d}$`, keyPrefix, shownChars))
+)
 
 // ErrBadID is returned for an app id that isn't lowercase letters, digits
 // and dashes.
@@ -33,6 +39,9 @@ var ErrBadID = errors.New("app id must be 1-63 lowercase letters, digits or dash
 
 // ErrExists is returned when creating an app whose id is taken.
 var ErrExists = errors.New("an app with that id already exists")
+
+// ErrKeyNotFound is returned for a key prefix that matches no ingest key.
+var ErrKeyNotFound = errors.New("no ingest key has that prefix")
 
 // ValidID reports whether id is a well-formed app id.
 func ValidID(id string) bool { return idPattern.MatchString(id) }
@@ -72,12 +81,28 @@ func addKey(ctx context.Context, q *db.Queries, appID string) (string, error) {
 	_, err := q.CreateAppKey(ctx, db.CreateAppKeyParams{
 		AppID:   appID,
 		KeyHash: hashKey(key),
-		Prefix:  key[:len(keyPrefix)+6],
+		Prefix:  key[:len(keyPrefix)+shownChars],
 	})
 	if err != nil {
 		return "", fmt.Errorf("create key: %w", err)
 	}
 	return key, nil
+}
+
+// Revoke stops accepting the key with the given prefix and returns its app
+// id. Revoking a key twice keeps the first revocation time.
+func Revoke(ctx context.Context, q *db.Queries, prefix string) (string, error) {
+	if !prefixPattern.MatchString(prefix) {
+		return "", ErrKeyNotFound
+	}
+	appID, err := q.RevokeKey(ctx, prefix)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrKeyNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("revoke key: %w", err)
+	}
+	return appID, nil
 }
 
 func hashKey(key string) []byte {

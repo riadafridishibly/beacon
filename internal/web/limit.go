@@ -33,6 +33,13 @@ func NewLimiter(every time.Duration, burst int) *Limiter {
 
 // Allow reports whether key may make a request now, and counts it.
 func (l *Limiter) Allow(key string) bool {
+	ok, _ := l.Take(key)
+	return ok
+}
+
+// Take is Allow that also returns, for a refused request, how long until
+// key can make another.
+func (l *Limiter) Take(key string) (bool, time.Duration) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := time.Now()
@@ -44,12 +51,15 @@ func (l *Limiter) Allow(key string) bool {
 		// Memory stays bounded under a flood of new keys; keys already
 		// tracked keep their own limits.
 		if len(l.buckets) >= l.max {
-			return false
+			return false, sweepEvery
 		}
 		b = rate.NewLimiter(rate.Every(l.every), l.burst)
 		l.buckets[key] = b
 	}
-	return b.AllowN(now, 1)
+	if b.AllowN(now, 1) {
+		return true, 0
+	}
+	return false, time.Duration((1 - b.TokensAt(now)) * float64(l.every))
 }
 
 // sweep forgets buckets that have refilled, which behave like new ones.

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/netip"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -19,6 +20,8 @@ type Config struct {
 	// ViteURL is the Vite dev server the dashboard loads its CSS and JS
 	// from, set when BEACON_DEV=1. Empty serves the embedded build.
 	ViteURL string
+	// IngestKeyRate is the requests per second one ingest key can sustain.
+	IngestKeyRate int
 }
 
 func Load() (Config, error) {
@@ -29,6 +32,10 @@ func Load() (Config, error) {
 	}
 	if os.Getenv("BEACON_DEV") == "1" {
 		c.ViteURL = env("BEACON_VITE_URL", "http://localhost:8367")
+	}
+	var err error
+	if c.IngestKeyRate, err = positiveInt("BEACON_INGEST_KEY_RATE", 50); err != nil {
+		return Config{}, err
 	}
 	for _, s := range strings.Split(os.Getenv("BEACON_TRUSTED_PROXIES"), ",") {
 		s = strings.TrimSpace(s)
@@ -46,6 +53,18 @@ func Load() (Config, error) {
 		c.TrustedProxies = append(c.TrustedProxies, p.Masked())
 	}
 	return c, nil
+}
+
+func positiveInt(key string, fallback int) (int, error) {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return 0, fmt.Errorf("%s: %q is not a positive integer", key, v)
+	}
+	return n, nil
 }
 
 func env(key, fallback string) string {

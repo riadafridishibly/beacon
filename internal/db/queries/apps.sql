@@ -9,6 +9,16 @@ SELECT * FROM apps ORDER BY id;
 INSERT INTO app_keys (app_id, key_hash, prefix) VALUES (@app_id, @key_hash, @prefix)
 RETURNING id;
 
+-- name: ListAppKeys :many
+SELECT prefix, created_at, revoked_at FROM app_keys
+WHERE app_id = @app_id
+ORDER BY revoked_at IS NOT NULL, created_at DESC, id DESC;
+
+-- name: RevokeKey :one
+UPDATE app_keys SET revoked_at = coalesce(revoked_at, now())
+WHERE prefix = @prefix
+RETURNING app_id;
+
 -- name: AppForKey :one
 SELECT app_id FROM app_keys
 WHERE key_hash = @key_hash AND revoked_at IS NULL;
