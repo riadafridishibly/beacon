@@ -25,8 +25,18 @@ func TestGenerate(t *testing.T) {
 	oldest := now.AddDate(0, 0, -days-1)
 	seen := map[string]int{}
 	spike, normal := 0, 0
+	usersOfDevice := map[string]map[string]bool{}
+	anonymous := map[string]bool{}
 	for _, e := range events {
 		seen[e.Name]++
+		if e.UserID == nil {
+			anonymous[e.DeviceID] = true
+		} else {
+			if usersOfDevice[e.DeviceID] == nil {
+				usersOfDevice[e.DeviceID] = map[string]bool{}
+			}
+			usersOfDevice[e.DeviceID][*e.UserID] = true
+		}
 		if !namePattern.MatchString(e.Name) {
 			t.Fatalf("bad name %q", e.Name)
 		}
@@ -51,6 +61,18 @@ func TestGenerate(t *testing.T) {
 	}
 	if spike == 0 || normal == 0 {
 		t.Errorf("error.sync: %d on 2.0.0, %d on other versions", spike, normal)
+	}
+	shared, signedInLater := 0, 0
+	for id, users := range usersOfDevice {
+		if len(users) > 1 {
+			shared++
+		}
+		if anonymous[id] {
+			signedInLater++
+		}
+	}
+	if shared == 0 || signedInLater == 0 {
+		t.Errorf("%d shared devices, %d devices signed in later", shared, signedInLater)
 	}
 }
 
@@ -94,6 +116,13 @@ func TestSeedReplacesOnlyItsOwnApp(t *testing.T) {
 	}
 	if n := demoEvents(t, q, "other"); n != 1 {
 		t.Errorf("other app has %d events, want 1", n)
+	}
+	keys, err := q.ListAppKeys(ctx, appID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 2 || keys[0].RevokedAt != nil || keys[1].RevokedAt == nil {
+		t.Errorf("keys = %+v, want one active and one revoked", keys)
 	}
 }
 
