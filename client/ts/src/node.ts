@@ -40,6 +40,13 @@ export function fileStore(dir: string): Store {
   };
 }
 
+/** platformName returns the name the Go client sends for the same system. */
+export function platformName(platform: string): string {
+  if (platform === "darwin") return "macos";
+  if (platform === "win32") return "windows";
+  return platform;
+}
+
 /** nodeOptions gives the platform options for Node and Electron's main process. */
 export function nodeOptions(
   dir: string,
@@ -47,7 +54,7 @@ export function nodeOptions(
   return {
     store: fileStore(dir),
     gzip: (data) => gzipAsync(data),
-    platform: process.platform,
+    platform: platformName(process.platform),
     processStartMs: performance.timeOrigin,
   };
 }

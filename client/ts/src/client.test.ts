@@ -8,6 +8,7 @@ import {
   keyValueStore,
   type Store,
 } from "./index.ts";
+import { platformName } from "./node.ts";
 import { Queue } from "./queue.ts";
 import { backoffDelay } from "./send.ts";
 import { decode, names, startServer } from "./testserver.ts";
@@ -214,9 +215,89 @@ test("createClient rejects bad options", async (t) => {
     { endpoint: "ftp://x" },
     { key: "" },
     { appVersion: "a".repeat(65) },
+    { batchEvents: 0 },
+    { batchEvents: 1001 },
+    { batchEvents: 1.5 },
   ]) {
     await assert.rejects(createClient({ ...opts, ...bad }), BeaconError);
   }
+});
+
+test("a logger that throws doesn't stop delivery", async (t) => {
+  const srv = await startServer(t);
+  srv.respond = (call) => (call === 0 ? [500, `{"error":"internal error"}`] : null);
+  const c = await createClient({
+    ...(await srv.options(t)),
+    log: () => {
+      throw new Error("broken logger");
+    },
+  });
+  c.track("a");
+  c.flush();
+  assert.equal(names(decode(await srv.wait(1))), "a");
+  await c.close();
+});
+
+test("close doesn't send once its time is up", async (t) => {
+  const srv = await startServer(t);
+  let requests = 0;
+  srv.respond = () => {
+    requests++;
+    return null;
+  };
+  const store = memoryStore();
+  const c = await createClient({
+    ...(await srv.options(t)),
+    store,
+    closeWaitMs: 1,
+    gzip: async (data) => {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      return Buffer.from(data);
+    },
+  });
+  c.track("a");
+  await c.close();
+  assert.equal(requests, 0);
+  assert.ok([...store.data.keys()].some((k) => k.startsWith("queue.")));
+});
+
+test("platform names match the Go client", () => {
+  assert.equal(platformName("darwin"), "macos");
+  assert.equal(platformName("win32"), "windows");
+  assert.equal(platformName("linux"), "linux");
+});
+
+test("a saved segment leaves memory when sealed", async () => {
+  const store = memoryStore();
+  const q = await openQueue(store, 1 << 20, 10);
+  q.add(`{"name":"a"}`);
+  await q.sync();
+  q.seal();
+  const seg = q.oldest();
+  assert.ok(seg);
+  assert.equal(seg.lines, undefined);
+  assert.deepEqual(await q.read(seg), [`{"name":"a"}`]);
+});
+
+test("an unsaved segment stays in memory when sealed", async () => {
+  const store = memoryStore();
+  store.set = async () => {
+    throw new Error("disk full");
+  };
+  const q = await Queue.open({
+    store,
+    maxBytes: 1 << 20,
+    maxEvents: 10,
+    batchBytes: 900 << 10,
+    onDrop: () => {},
+    onError: () => {},
+  });
+  q.add(`{"name":"a"}`);
+  await q.sync();
+  q.seal();
+  const seg = q.oldest();
+  assert.ok(seg);
+  assert.deepEqual(await q.read(seg), [`{"name":"a"}`]);
 });
 
 test("queue drops the oldest past the cap", async () => {

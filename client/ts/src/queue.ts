@@ -17,8 +17,10 @@ export interface Segment {
   events: number;
   // In memory until written. The open segment always keeps them.
   lines?: string[];
+  saved?: boolean;
 }
 
+/** QueueOptions configures Queue.open. */
 export interface QueueOptions {
   store: Store;
   maxBytes: number;
@@ -110,6 +112,7 @@ export class Queue {
   }
 
   seal(): void {
+    if (this.active?.saved) this.active.lines = undefined;
     this.active = null;
   }
 
@@ -164,6 +167,7 @@ export class Queue {
   }
 
   private markDirty(seg: Segment): void {
+    seg.saved = false;
     this.dirty.add(seg);
     if (this.writeScheduled) return;
     this.writeScheduled = true;
@@ -178,7 +182,10 @@ export class Queue {
       if (!this.segs.includes(seg) || !seg.lines) continue;
       try {
         await this.opts.store.set(seg.key, `${seg.lines.join("\n")}\n`);
-        if (seg !== this.active && !this.dirty.has(seg)) seg.lines = undefined;
+        if (!this.dirty.has(seg)) {
+          seg.saved = true;
+          if (seg !== this.active) seg.lines = undefined;
+        }
       } catch (err) {
         // A sealed segment keeps its lines, so it can still be sent.
         this.opts.onError(`write queue: ${err}`);

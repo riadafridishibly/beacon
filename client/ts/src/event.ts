@@ -8,8 +8,10 @@ const maxProps = 16 << 10;
 
 const namePattern = /^[a-z0-9_]+(\.[a-z0-9_]+)*$/;
 
+/** Props is the JSON object an event carries beside its one numeric value. */
 export type Props = Record<string, unknown>;
 
+/** WireEvent is one event as the server receives it. */
 export interface WireEvent {
   name: string;
   ts?: string;
@@ -66,12 +68,49 @@ export function validate(e: WireEvent): void {
       `beacon: app_version, platform and os_version must be at most ${maxAttrLen} bytes`,
     );
   }
+  if (
+    [e.device_id, e.user_id, e.session_id, e.app_version, e.platform, e.os_version].some(hasNul)
+  ) {
+    throw new BeaconError(
+      "beacon: device_id, user_id, session_id, app_version, platform and os_version must not contain NUL",
+    );
+  }
   if (e.value !== undefined && !Number.isFinite(e.value)) {
     throw new BeaconError("beacon: value must be a finite number");
   }
-  if (e.props !== undefined && byteLength(JSON.stringify(e.props)) > maxProps) {
-    throw new BeaconError(`beacon: props must be at most ${maxProps} bytes`);
+  if (e.props !== undefined) {
+    const json = JSON.stringify(e.props);
+    if (byteLength(json) > maxProps) {
+      throw new BeaconError(`beacon: props must be at most ${maxProps} bytes`);
+    }
+    if (!storableJson(json)) {
+      throw new BeaconError("beacon: props must not contain NUL or unpaired surrogates");
+    }
   }
+}
+
+function hasNul(s: string | undefined): boolean {
+  return s?.includes("\0") ?? false;
+}
+
+// jsonb refuses \u0000 and unpaired surrogates. JSON.stringify writes both as
+// escapes.
+function storableJson(json: string): boolean {
+  for (let i = 0; i + 1 < json.length; i++) {
+    if (json[i] !== "\\") continue;
+    i++;
+    if (json[i] !== "u") continue;
+    const r = Number.parseInt(json.slice(i + 1, i + 5), 16);
+    i += 4;
+    if (r === 0 || (r >= 0xdc00 && r <= 0xdfff)) return false;
+    if (r >= 0xd800 && r <= 0xdbff) {
+      if (json[i + 1] !== "\\" || json[i + 2] !== "u") return false;
+      const low = Number.parseInt(json.slice(i + 3, i + 7), 16);
+      if (!(low >= 0xdc00 && low <= 0xdfff)) return false;
+      i += 6;
+    }
+  }
+  return true;
 }
 
 function over(s: string | undefined, limit: number): boolean {

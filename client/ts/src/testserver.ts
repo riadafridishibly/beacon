@@ -9,6 +9,7 @@ import { gunzipSync } from "node:zlib";
 import type { ClientOptions } from "./index.ts";
 import { nodeOptions } from "./node.ts";
 
+/** Received is an event as the test server decodes it. */
 export interface Received {
   name: string;
   device_id?: string;
@@ -20,6 +21,7 @@ export interface Received {
 
 type Respond = (call: number) => [number, string] | null;
 
+/** TestServer records the bodies it accepts. */
 export class TestServer {
   readonly bodies: string[] = [];
   respond: Respond | null = null;
@@ -80,16 +82,19 @@ export class TestServer {
   }
 }
 
+/** startServer starts a TestServer that stops with the test. */
 export async function startServer(t: TestContext): Promise<TestServer> {
   const s = new TestServer();
   await s.start(t);
   return s;
 }
 
+/** decode returns the events of the accepted bodies. */
 export function decode(bodies: string[]): Received[] {
   return bodies.flatMap((b) => (JSON.parse(b) as { events: Received[] }).events);
 }
 
+/** names joins event names for comparison. */
 export function names(events: Received[]): string {
   return events.map((e) => e.name).join(" ");
 }

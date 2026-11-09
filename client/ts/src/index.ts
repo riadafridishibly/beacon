@@ -6,13 +6,14 @@ export { BeaconError, type Props } from "./event.ts";
 export type { Store } from "./queue.ts";
 
 const requestTimeoutMs = 30_000;
-const closeWaitMs = 5_000;
+const maxBatchEvents = 1000;
 
 // Keeps a batch under the server's 1 MiB limit even when it isn't compressed.
 const maxBatchBytes = 900 << 10;
 
 const loadedAt = Date.now();
 
+/** ClientOptions configures createClient. endpoint, key and store are required. */
 export interface ClientOptions {
   /** The server's base URL. */
   endpoint: string;
@@ -35,9 +36,11 @@ export interface ClientOptions {
   maxQueueBytes?: number;
   /** Receives messages about delivery problems and dropped data. */
   log?: (message: string) => void;
+  /** At most 1000, the server's limit. */
+  batchEvents?: number;
   flushIntervalMs?: number;
   heartbeatIntervalMs?: number;
-  batchEvents?: number;
+  closeWaitMs?: number;
   minBackoffMs?: number;
   maxBackoffMs?: number;
   now?: () => number;
@@ -48,6 +51,17 @@ function defaultRandomId(): string {
   if (!c?.getRandomValues) throw new BeaconError("beacon: randomId is required on this platform");
   const bytes = c.getRandomValues(new Uint8Array(16));
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// A logger that throws must not stop delivery.
+function safeLog(log: ClientOptions["log"]): (message: string) => void {
+  return (message) => {
+    try {
+      log?.(`beacon: ${message}`);
+    } catch {
+      // Nothing useful can be done with the failure.
+    }
+  };
 }
 
 function formatTime(ms: number): string {
@@ -64,6 +78,7 @@ export class Client {
   readonly deviceId: string;
 
   private readonly opts: ClientOptions;
+  private readonly logf: (message: string) => void;
   private readonly url: string;
   private readonly queue: Queue;
   private readonly allowed: ReadonlySet<string>;
@@ -93,6 +108,7 @@ export class Client {
   /** @internal Use createClient. */
   constructor(opts: ClientOptions, deviceId: string, queue: Queue, randomId: () => string) {
     this.opts = opts;
+    this.logf = safeLog(opts.log);
     this.deviceId = deviceId;
     this.queue = queue;
     this.randomId = randomId;
@@ -178,7 +194,7 @@ export class Client {
     const giveUp = setTimeout(() => {
       this.stopped = true;
       this.inFlight?.abort();
-    }, closeWaitMs);
+    }, this.opts.closeWaitMs ?? 5_000);
     await this.draining;
     if (!this.waiting && !this.stopped) await this.runDrain();
     clearTimeout(giveUp);
@@ -324,6 +340,7 @@ export class Client {
       body = (await this.opts.gzip(json)) as BodyInit;
       headers["Content-Encoding"] = "gzip";
     }
+    if (this.stopped) throw new BeaconError("beacon: client closing");
     const abort = new AbortController();
     this.inFlight = abort;
     const timeout = setTimeout(() => abort.abort(), requestTimeoutMs);
@@ -336,10 +353,6 @@ export class Client {
       clearTimeout(timeout);
       this.inFlight = null;
     }
-  }
-
-  private logf(message: string): void {
-    this.opts.log?.(`beacon: ${message}`);
   }
 }
 
@@ -360,6 +373,10 @@ export async function createClient(opts: ClientOptions): Promise<Client> {
   if (!/^https?:\/\/[^/\s]+/.test(opts.endpoint)) {
     throw new BeaconError(`beacon: invalid endpoint ${JSON.stringify(opts.endpoint)}`);
   }
+  const batchEvents = opts.batchEvents ?? 100;
+  if (!Number.isInteger(batchEvents) || batchEvents < 1 || batchEvents > maxBatchEvents) {
+    throw new BeaconError(`beacon: batchEvents must be from 1 to ${maxBatchEvents}`);
+  }
   const randomId = opts.randomId ?? defaultRandomId;
   const deviceId = await loadDeviceId(opts.store, randomId);
   validate({
@@ -369,11 +386,11 @@ export async function createClient(opts: ClientOptions): Promise<Client> {
     platform: opts.platform,
     os_version: opts.osVersion,
   });
-  const log = (message: string) => opts.log?.(`beacon: ${message}`);
+  const log = safeLog(opts.log);
   const queue = await Queue.open({
     store: opts.store,
     maxBytes: opts.maxQueueBytes || 10 << 20,
-    maxEvents: opts.batchEvents ?? 100,
+    maxEvents: batchEvents,
     batchBytes: maxBatchBytes,
     onDrop: (n) => log(`queue full: dropped ${n} oldest events`),
     onError: log,

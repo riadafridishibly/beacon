@@ -1,7 +1,9 @@
 const maxRetryAfterSeconds = 3600;
 
+/** Action is what to do with a batch after a response. */
 export type Action = "accept" | "drop_event" | "drop_batch" | "retry_after" | "backoff";
 
+/** Outcome is an Action with the event index or wait it applies to. */
 export interface Outcome {
   action: Action;
   index?: number;

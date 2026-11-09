@@ -17,7 +17,7 @@ test("conformance: events", () => {
     fixture<{ name: string; event: WireEvent; props_size?: number; valid: boolean }[]>(
       "events.json",
     );
-  const allowed = new Set(["p", "cold"]);
+  const allowed = new Set(["p", "p\0", "cold"]);
   for (const c of cases) {
     const raw = c.props_size ? { p: "a".repeat(c.props_size - `{"p":""}`.length) } : c.event.props;
     let valid = true;
