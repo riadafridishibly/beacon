@@ -166,7 +166,9 @@ func (d *dashboard) createApp(w http.ResponseWriter, r *http.Request) error {
 		return web.Render(w, r, http.StatusUnprocessableEntity, newAppPage(auth.Nav(r.Context()), f))
 	}
 	// The key is shown in this response and nowhere else, so the page is
-	// rendered here rather than after a redirect, and kept out of caches.
+	// rendered here rather than after a redirect, kept out of caches, and
+	// rendered even if the app was committed just before the deadline.
 	w.Header().Set("Cache-Control", "no-store")
+	r = r.WithContext(context.WithoutCancel(r.Context()))
 	return web.Render(w, r, http.StatusCreated, appCreatedPage(auth.Nav(r.Context()), f.ID, key))
 }

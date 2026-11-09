@@ -19,18 +19,20 @@ var ErrNotFound = errors.New("not found")
 type HandlerFunc func(w http.ResponseWriter, r *http.Request) error
 
 // Handle adapts h to http.Handler. ErrNotFound renders the 404 page, and an
-// expired request context the timeout page. Any other error is logged and
-// renders the 500 page, unless the client went away.
+// error from the request's deadline the timeout page. Any other error is
+// logged and renders the 500 page, unless the client went away.
 func Handle(h HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		err := h(w, r)
-		if err == nil || errors.Is(r.Context().Err(), context.Canceled) {
+		if err == nil || errors.Is(err, context.Canceled) && r.Context().Err() != nil {
 			return
 		}
-		if errors.Is(r.Context().Err(), context.DeadlineExceeded) {
-			slog.WarnContext(r.Context(), "request timed out", "method", r.Method, "path", r.URL.Path)
-			// templ refuses to render with an expired context.
-			_ = Render(w, r.WithContext(context.WithoutCancel(r.Context())), http.StatusServiceUnavailable, TimeoutPage())
+		// templ refuses to render with an expired context.
+		timedOut := errors.Is(err, context.DeadlineExceeded) && r.Context().Err() != nil
+		r = r.WithContext(context.WithoutCancel(r.Context()))
+		if timedOut {
+			slog.WarnContext(r.Context(), "request timed out", "method", r.Method, "path", r.URL.Path, "err", err)
+			_ = Render(w, r, http.StatusServiceUnavailable, TimeoutPage())
 			return
 		}
 		if errors.Is(err, ErrNotFound) {
