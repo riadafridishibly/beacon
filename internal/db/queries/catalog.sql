@@ -1,5 +1,6 @@
 -- Props keys come from each name's latest events, because reading every
--- row's props costs a full table scan.
+-- row's props costs a full table scan. Rows without props stay in the sample
+-- so its size bounds the rows read.
 -- name: ListEventNames :many
 WITH page AS (
     SELECT n.name, count(*) AS events, max(n.ts)::timestamptz AS last_seen
@@ -17,7 +18,7 @@ CROSS JOIN LATERAL (
     FROM (
         SELECT e.props
         FROM events e
-        WHERE e.app_id = @app_id AND e.name = p.name AND e.props IS NOT NULL
+        WHERE e.app_id = @app_id AND e.name = p.name
         ORDER BY e.ts DESC
         LIMIT @key_sample
     ) recent
@@ -49,7 +50,7 @@ SELECT k.key::text AS key
 FROM (
     SELECT e.props
     FROM events e
-    WHERE e.app_id = @app_id AND e.name = @name AND e.ts >= @since AND e.ts < @until AND e.props IS NOT NULL
+    WHERE e.app_id = @app_id AND e.name = @name AND e.ts >= @since AND e.ts < @until
     ORDER BY e.ts DESC
     LIMIT @key_sample
 ) recent

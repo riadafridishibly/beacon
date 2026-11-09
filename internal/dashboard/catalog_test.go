@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -28,8 +29,6 @@ func props(t *testing.T, m map[string]any) json.RawMessage {
 	return b
 }
 
-func vp(v float64) *float64 { return &v }
-
 func seedCatalog(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	ctx := context.Background()
@@ -42,13 +41,13 @@ func seedCatalog(t *testing.T, pool *pgxpool.Pool) {
 	var rows []db.InsertEventsParams
 	for i, v := range []float64{10, 20, 30, 40} {
 		rows = append(rows, db.InsertEventsParams{
-			AppID: "alpha", Name: "app.open", DeviceID: "d1", Ts: now.Add(-time.Duration(i) * time.Minute), Value: vp(v),
+			AppID: "alpha", Name: "app.open", DeviceID: "d1", Ts: now.Add(-time.Duration(i) * time.Minute), Value: fp(v),
 			Props: props(t, map[string]any{"screen": "home", "cold": true}),
 		})
 	}
 	rows = append(rows,
-		db.InsertEventsParams{AppID: "alpha", Name: "app.open", DeviceID: "d1", Ts: now.Add(-day), Value: vp(100), Props: props(t, map[string]any{"screen": "<b>settings</b>"})},
-		db.InsertEventsParams{AppID: "alpha", Name: "app.open", DeviceID: "d1", Ts: now.Add(-20 * day), Value: vp(500), Props: props(t, map[string]any{"old": 1})},
+		db.InsertEventsParams{AppID: "alpha", Name: "app.open", DeviceID: "d1", Ts: now.Add(-day), Value: fp(100), Props: props(t, map[string]any{"screen": "<b>settings</b>"})},
+		db.InsertEventsParams{AppID: "alpha", Name: "app.open", DeviceID: "d1", Ts: now.Add(-20 * day), Value: fp(500), Props: props(t, map[string]any{"old": 1})},
 		db.InsertEventsParams{AppID: "alpha", Name: "tap", DeviceID: "d1", Ts: now.Add(-time.Hour)},
 		db.InsertEventsParams{AppID: "alpha", Name: "error.sync", DeviceID: "d1", Ts: now.Add(-40 * day), Props: props(t, map[string]any{"message": "boom"})},
 		db.InsertEventsParams{AppID: "beta", Name: "beta.only", DeviceID: "d1", Ts: now, Props: props(t, map[string]any{"secret": 1})},
@@ -133,6 +132,38 @@ func TestLoadCatalogKeysAndPaging(t *testing.T) {
 	}
 }
 
+func TestPropKeySampleCountsRowsWithoutProps(t *testing.T) {
+	t.Parallel()
+	pool := testdb.New(t)
+	ctx := context.Background()
+	if _, err := apps.Create(ctx, pool, "alpha", "Alpha"); err != nil {
+		t.Fatal(err)
+	}
+	rows := []db.InsertEventsParams{{AppID: "alpha", Name: "beat", DeviceID: "d", Ts: now.Add(-time.Hour), Props: props(t, map[string]any{"old": 1})}}
+	for i := range propKeySample {
+		rows = append(rows, db.InsertEventsParams{AppID: "alpha", Name: "beat", DeviceID: "d", Ts: now.Add(-time.Duration(i) * time.Second)})
+	}
+	if _, err := db.New(pool).InsertEvents(ctx, rows); err != nil {
+		t.Fatal(err)
+	}
+	d := &dashboard{pool: pool, q: db.New(pool), nowFunc: func() time.Time { return now }}
+
+	list, err := d.loadCatalog(ctx, "alpha", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Rows) != 1 || len(list.Rows[0].Keys) != 0 {
+		t.Errorf("list = %+v", list.Rows)
+	}
+	v, err := d.loadCatalogEvent(ctx, "alpha", "beat", "7d", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Values.Key != "" {
+		t.Errorf("key = %q", v.Values.Key)
+	}
+}
+
 func TestParseCatalogCursor(t *testing.T) {
 	t.Parallel()
 	n, name, ok := parseCatalogCursor(catalogCursor(12, "a_b.c"))
@@ -171,6 +202,9 @@ func TestLoadCatalogEvent(t *testing.T) {
 		t.Errorf("a day without events has p50 %v", *empty)
 	}
 
+	if v.Values.Requested != "" {
+		t.Errorf("requested = %q with no key asked for", v.Values.Requested)
+	}
 	if v.Values.Key != "screen" || v.Values.Keys[1] != "cold" {
 		t.Errorf("keys = %q, chosen %q", v.Values.Keys, v.Values.Key)
 	}
@@ -186,9 +220,9 @@ func TestLoadCatalogEvent(t *testing.T) {
 	if chosen.Values.Key != "cold" || len(chosen.Values.Rows) != 1 || chosen.Values.Rows[0].Label != "true" {
 		t.Errorf("chosen = %+v", chosen.Values)
 	}
-	unknown, err := d.loadCatalogEvent(ctx, "alpha", "app.open", "7d", "not-a-key", false)
-	if err != nil || unknown.Values.Key != "screen" {
-		t.Errorf("unknown key fell back to %q, %v", unknown.Values.Key, err)
+	unknown, err := d.loadCatalogEvent(ctx, "alpha", "app.open", "7d", "old", false)
+	if err != nil || unknown.Values.Key != "screen" || unknown.Values.Requested != "old" {
+		t.Errorf("key missing from the range = %+v, %v", unknown.Values, err)
 	}
 
 	bare, err := d.loadCatalogEvent(ctx, "alpha", "tap", "7d", "", true)
@@ -257,6 +291,9 @@ func TestCatalogEventFragments(t *testing.T) {
 		c.h.ServeHTTP(rec, r)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("%s: %d", target, rec.Code)
+		}
+		if vary := rec.Header().Values("Vary"); !slices.Contains(vary, "HX-Target") {
+			t.Errorf("%s: Vary = %q", target, vary)
 		}
 		return rec.Body.String()
 	}

@@ -76,7 +76,7 @@ var (
 	numberFormat = valueFormat{
 		Value: formatNumber,
 		Tick:  formatNumber,
-		Ticks: func(max float64) []float64 { return niceTicks(max, 0.01) },
+		Ticks: numberTicks,
 	}
 	durationFormat = valueFormat{
 		Value: formatDuration,
@@ -94,6 +94,9 @@ type chartData struct {
 	Days   []time.Time
 	Series []series
 	Format valueFormat
+	// PlotZeros draws a chart whose values are all zero. Otherwise such a
+	// chart has nothing to show.
+	PlotZeros bool
 }
 
 type chartTick struct {
@@ -172,23 +175,24 @@ type chartView struct {
 // layout computes the positions of everything chartView draws.
 func layout(c chartData) chartView {
 	v := chartView{chartData: c}
-	top := 0.0
+	top, bottom, present := 0.0, 0.0, false
 	for _, s := range c.Series {
 		for _, p := range s.Values {
 			if p != nil {
-				top = max(top, *p)
+				top, bottom, present = max(top, *p), min(bottom, *p), true
 			}
 		}
 	}
-	v.HasData = top > 0
+	v.HasData = top > 0 || bottom < 0 || (c.PlotZeros && present)
 	v.Rows = tableRows(c)
 	if !v.HasData {
 		return v
 	}
 
-	ticks := c.Format.Ticks(top)
-	scale := ticks[len(ticks)-1]
-	y := func(val float64) float64 { return plotBase - val/scale*(plotBase-plotTop) }
+	ticks := axisTicks(c.Format, bottom, top)
+	low, high := ticks[0], ticks[len(ticks)-1]
+	// Halved so the span of the largest values ingest accepts stays finite.
+	y := func(val float64) float64 { return plotBase - (val/2-low/2)/(high/2-low/2)*(plotBase-plotTop) }
 	for _, t := range ticks {
 		v.Ticks = append(v.Ticks, chartTick{Y: y(t), Label: c.Format.Tick(t)})
 	}
@@ -357,6 +361,34 @@ func niceTicks(top, minStep float64) []float64 {
 	return ticks
 }
 
+// numberTicks allows any step, since the values can be arbitrarily small.
+func numberTicks(top float64) []float64 {
+	if top <= 0 {
+		return []float64{0, 1}
+	}
+	return niceTicks(top, 0)
+}
+
+// axisTicks extends a format's ticks below zero when the values go there.
+func axisTicks(f valueFormat, bottom, top float64) []float64 {
+	if bottom >= 0 {
+		return f.Ticks(top)
+	}
+	span := top - bottom
+	if math.IsInf(span, 0) {
+		return []float64{bottom, 0, top}
+	}
+	base := f.Ticks(span)
+	step := base[1] - base[0]
+	var ticks []float64
+	for k := math.Floor(bottom / step); ; k++ {
+		ticks = append(ticks, k*step)
+		if k*step >= top {
+			return ticks
+		}
+	}
+}
+
 // durationTicks picks whole seconds, minutes or hours.
 func durationTicks(top float64) []float64 {
 	unit := 1.0
@@ -383,12 +415,13 @@ func formatMillis(v float64) string {
 	return strconv.FormatFloat(v/1000, 'f', 1, 64) + " s"
 }
 
-// formatNumber is for values whose unit only the client knows.
+// formatNumber is for values whose unit only the client knows, and which can
+// be any size ingest accepts.
 func formatNumber(v float64) string {
-	if math.Abs(v) >= 1000 {
+	if abs := math.Abs(v); abs >= 1000 && abs < 1e15 {
 		return web.Count(int64(math.Round(v)))
 	}
-	return strconv.FormatFloat(math.Round(v*100)/100, 'f', -1, 64)
+	return strconv.FormatFloat(v, 'g', 4, 64)
 }
 
 func formatDuration(seconds float64) string {

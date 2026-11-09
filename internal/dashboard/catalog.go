@@ -6,6 +6,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -97,13 +98,14 @@ type catalogEventView struct {
 
 func (v catalogEventView) hasValues() bool { return v.Total.WithValue > 0 }
 
-// propValuesView is the top values of one props key. Key is empty when no
-// event in the range has props.
+// propValuesView is the top values of one props key. Key is the key shown,
+// empty when no event in the range has props. Requested is the key the URL
+// asked for, which range links keep so a range without it doesn't lose it.
 type propValuesView struct {
-	AppID, Name, Range, Key string
-	Keys                    []string
-	Rows                    []db.EventTopValuesRow
-	Top                     int64
+	AppID, Name, Range, Key, Requested string
+	Keys                               []string
+	Rows                               []db.EventTopValuesRow
+	Top                                int64
 }
 
 func (d *dashboard) catalog(w http.ResponseWriter, r *http.Request) error {
@@ -156,18 +158,17 @@ func (d *dashboard) loadCatalog(ctx context.Context, appID, before string) (cata
 func (d *dashboard) catalogEvent(w http.ResponseWriter, r *http.Request) error {
 	q := r.URL.Query()
 	appID, name, rng, key := r.PathValue("id"), r.PathValue("name"), parseRange(q.Get("range")), q.Get("key")
-	if web.IsHTMX(r) && r.Header.Get("HX-Target") == valuesTarget {
-		v, err := d.loadCatalogEvent(r.Context(), appID, name, rng, key, false)
-		if err != nil {
-			return err
-		}
-		return web.Render(w, r, http.StatusOK, keyChange(v.Values))
-	}
-	v, err := d.loadCatalogEvent(r.Context(), appID, name, rng, key, true)
+	valuesOnly := web.IsHTMX(r) && r.Header.Get("HX-Target") == valuesTarget
+	v, err := d.loadCatalogEvent(r.Context(), appID, name, rng, key, !valuesOnly)
 	if err != nil {
 		return err
 	}
-	if web.IsHTMX(r) {
+	// The same URL also returns different fragments depending on this header.
+	w.Header().Add("Vary", "HX-Target")
+	switch {
+	case valuesOnly:
+		return web.Render(w, r, http.StatusOK, keyChange(v.Values))
+	case web.IsHTMX(r):
 		return web.Render(w, r, http.StatusOK, catalogEventBody(v))
 	}
 	return web.Render(w, r, http.StatusOK, catalogEventPage(auth.Nav(r.Context()), v))
@@ -205,7 +206,7 @@ func (d *dashboard) loadCatalogEvent(ctx context.Context, appID, name, rng, key 
 }
 
 func (d *dashboard) loadPropValues(ctx context.Context, appID, name, rng, key string, since, until time.Time) (propValuesView, error) {
-	v := propValuesView{AppID: appID, Name: name, Range: rng}
+	v := propValuesView{AppID: appID, Name: name, Range: rng, Requested: key}
 	var err error
 	v.Keys, err = d.q.EventPropKeys(ctx, db.EventPropKeysParams{
 		AppID: appID, Name: name, Since: since, Until: until,
@@ -215,10 +216,8 @@ func (d *dashboard) loadPropValues(ctx context.Context, appID, name, rng, key st
 		return v, err
 	}
 	v.Key = v.Keys[0]
-	for _, k := range v.Keys {
-		if k == key {
-			v.Key = k
-		}
+	if slices.Contains(v.Keys, key) {
+		v.Key = key
 	}
 	v.Rows, err = d.q.EventTopValues(ctx, db.EventTopValuesParams{AppID: appID, Name: name, Since: since, Until: until, Key: v.Key})
 	if err != nil {
@@ -260,7 +259,7 @@ func (v *catalogEventView) buildCharts(days []time.Time, rows []db.EventDailyRow
 		Title: "Value",
 		Note:  "p50 and p95 per day",
 		Empty: "No events with a value in this range.",
-		Kind:  lineChart, Days: days, Format: numberFormat,
+		Kind:  lineChart, Days: days, Format: numberFormat, PlotZeros: true,
 		Series: []series{withValues(slot1, "p50", p50), withValues(slot2, "p95", p95)},
 	})
 }

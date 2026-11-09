@@ -122,7 +122,7 @@ templ catalogEventBody(v catalogEventView) {
 }
 
 templ eventRanges(v propValuesView) {
-	@rangePicker(v.Range, "#event", func(rng string) string { return catalogEventURL(v.AppID, v.Name, rng, v.Key) })
+	@rangePicker(v.Range, "#event", func(rng string) string { return catalogEventURL(v.AppID, v.Name, rng, v.Requested) })
 }
 
 // keyChange is the response to choosing a key. The range links carry the key,

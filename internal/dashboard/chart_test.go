@@ -117,6 +117,69 @@ func TestLineBreaksAtGaps(t *testing.T) {
 	}
 }
 
+func TestFormatNumber(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		v    float64
+		want string
+	}{
+		{0, "0"},
+		{0.004, "0.004"},
+		{0.123456, "0.1235"},
+		{1.5, "1.5"},
+		{547, "547"},
+		{999.96, "1000"},
+		{1234.5, "1,235"},
+		{-1234.5, "-1,235"},
+		{-5, "-5"},
+		{1e30, "1e+30"},
+		{-1e30, "-1e+30"},
+	} {
+		if got := formatNumber(tt.v); got != tt.want {
+			t.Errorf("formatNumber(%v) = %q, want %q", tt.v, got, tt.want)
+		}
+	}
+}
+
+func TestLayoutValuesNotAboveZero(t *testing.T) {
+	t.Parallel()
+	zeros := chartData{Kind: lineChart, Days: testDays(2), Format: numberFormat, Series: []series{{Values: []*float64{fp(0), fp(0)}}}}
+	if layout(zeros).HasData {
+		t.Error("all zeros plotted without PlotZeros")
+	}
+	zeros.PlotZeros = true
+	if v := layout(zeros); !v.HasData || len(v.Ticks) < 2 {
+		t.Errorf("all zeros with PlotZeros = %+v", v)
+	}
+
+	for _, values := range [][]*float64{
+		{fp(-5), fp(-20)},
+		{fp(-5), fp(20)},
+		{fp(-1e308), fp(1e308)},
+		{fp(0.001), fp(0.004)},
+	} {
+		v := layout(chartData{Kind: lineChart, Days: testDays(2), Format: numberFormat, Series: []series{{Values: values}}})
+		if !v.HasData {
+			t.Errorf("%v has no data", values)
+			continue
+		}
+		for _, tick := range v.Ticks {
+			if !(tick.Y >= plotTop-1e-6 && tick.Y <= plotBase+1e-6) {
+				t.Errorf("%v: tick %q at %v is outside the plot", values, tick.Label, tick.Y)
+			}
+		}
+		for _, line := range v.Lines {
+			for _, seg := range line.Segments {
+				for _, y := range []float64{seg.Y1, seg.Y2} {
+					if !(y >= plotTop-1e-6 && y <= plotBase+1e-6) {
+						t.Errorf("%v: point at %v is outside the plot", values, y)
+					}
+				}
+			}
+		}
+	}
+}
+
 func TestLayoutEmpty(t *testing.T) {
 	t.Parallel()
 	if v := layout(lineChartOf(nil, nil)); v.HasData || len(v.Ticks) != 0 {

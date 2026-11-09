@@ -96,7 +96,7 @@ SELECT k.key::text AS key
 FROM (
     SELECT e.props
     FROM events e
-    WHERE e.app_id = $1 AND e.name = $2 AND e.ts >= $3 AND e.ts < $4 AND e.props IS NOT NULL
+    WHERE e.app_id = $1 AND e.name = $2 AND e.ts >= $3 AND e.ts < $4
     ORDER BY e.ts DESC
     LIMIT $5
 ) recent
@@ -208,7 +208,7 @@ CROSS JOIN LATERAL (
     FROM (
         SELECT e.props
         FROM events e
-        WHERE e.app_id = $1 AND e.name = p.name AND e.props IS NOT NULL
+        WHERE e.app_id = $1 AND e.name = p.name
         ORDER BY e.ts DESC
         LIMIT $2
     ) recent
@@ -233,7 +233,8 @@ type ListEventNamesRow struct {
 }
 
 // Props keys come from each name's latest events, because reading every
-// row's props costs a full table scan.
+// row's props costs a full table scan. Rows without props stay in the sample
+// so its size bounds the rows read.
 func (q *Queries) ListEventNames(ctx context.Context, arg ListEventNamesParams) ([]ListEventNamesRow, error) {
 	rows, err := q.db.Query(ctx, listEventNames,
 		arg.AppID,

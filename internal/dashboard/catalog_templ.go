@@ -840,7 +840,7 @@ func eventRanges(v propValuesView) templ.Component {
 		}
 		ctx = templ.InitializeContext(ctx)
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = rangePicker(v.Range, "#event", func(rng string) string { return catalogEventURL(v.AppID, v.Name, rng, v.Key) }).Render(ctx, templ_7745c5c3_Buffer)
+		templ_7745c5c3_Err = rangePicker(v.Range, "#event", func(rng string) string { return catalogEventURL(v.AppID, v.Name, rng, v.Requested) }).Render(ctx, templ_7745c5c3_Buffer)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
