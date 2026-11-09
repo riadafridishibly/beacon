@@ -101,7 +101,7 @@ func TestConformanceBatch(t *testing.T) {
 	cfg.AppVersion, cfg.Platform, cfg.OSVersion = "1.4.0", "macos", "15.1"
 	cfg.newID = func() string { return "fixed-id" }
 	cfg.now = func() time.Time { return time.Date(2026, 11, 8, 11, 59, 0, 0, time.UTC) }
-	cfg.AllowProp("cold")
+	cfg.AllowProps = []string{"cold"}
 	c := newClient(t, cfg)
 
 	c.SetUserID("tester@example.com")

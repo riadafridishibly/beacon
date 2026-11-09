@@ -65,12 +65,13 @@ type Config struct {
 	// MaxQueueBytes caps the queue on disk, 10 MiB by default. Past it the
 	// oldest events are dropped.
 	MaxQueueBytes int64
-	// ProcessStartUnixMs overrides the time AppOpened measures from.
-	ProcessStartUnixMs int64
+	// ProcessStart overrides the time AppOpened measures from.
+	ProcessStart time.Time
 	// Log is optional. It must not call the Client.
 	Log Logger
-
-	allowed map[string]bool
+	// AllowProps lists the props keys that may leave the app. Others are
+	// dropped.
+	AllowProps []string
 
 	// Set by tests.
 	flushEvery, heartbeatEvery, minBackoff, maxBackoff time.Duration
@@ -79,16 +80,8 @@ type Config struct {
 	newID                                              func() string
 }
 
-// AllowProp permits a props key. Keys that were not allowed are dropped
-// from events passed to Track, TrackValue and TrackError.
-func (c *Config) AllowProp(key string) {
-	if c.allowed == nil {
-		c.allowed = make(map[string]bool)
-	}
-	c.allowed[key] = true
-}
-
-// Client queues and sends events. Its methods are safe for concurrent use.
+// Client queues and sends events. Its methods are safe for concurrent use,
+// but a Props map must not change during the call it is passed to.
 type Client struct {
 	url, key               string
 	http                   *http.Client
@@ -130,13 +123,18 @@ func NewClient(cfg *Config) (*Client, error) {
 		return nil, fmt.Errorf("beacon: invalid Endpoint %q", cfg.Endpoint)
 	}
 
+	allowed := make(map[string]bool, len(cfg.AllowProps))
+	for _, key := range cfg.AllowProps {
+		allowed[key] = true
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &Client{
 		url:        strings.TrimRight(cfg.Endpoint, "/") + "/v1/events",
 		key:        cfg.Key,
 		http:       &http.Client{Timeout: requestTimeout},
 		log:        cfg.Log,
-		allowed:    maps.Clone(cfg.allowed),
+		allowed:    allowed,
 		now:        cfg.now,
 		newID:      cfg.newID,
 		started:    processStart,
@@ -159,8 +157,8 @@ func NewClient(cfg *Config) (*Client, error) {
 	if c.newID == nil {
 		c.newID = randomID
 	}
-	if cfg.ProcessStartUnixMs != 0 {
-		c.started = time.UnixMilli(cfg.ProcessStartUnixMs)
+	if !cfg.ProcessStart.IsZero() {
+		c.started = cfg.ProcessStart
 	}
 
 	fail := func(err error) (*Client, error) {
@@ -204,10 +202,11 @@ func (c *Client) Track(name string, props Props) error {
 }
 
 // TrackError queues the event error.<area>, which the dashboard counts as an
-// error. message is sent as the "message" prop only if AllowProp permits it,
-// and "" sends none.
+// error. message replaces any "message" key in props, without NUL and cut to
+// 2 KiB, and is sent only if AllowProps lists "message". "" leaves props as
+// they are.
 func (c *Client) TrackError(area, message string, props Props) error {
-	if message != "" {
+	if message = cleanMessage(message); message != "" {
 		props = maps.Clone(props)
 		if props == nil {
 			props = Props{}

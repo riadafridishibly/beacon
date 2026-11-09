@@ -151,8 +151,9 @@ export class Client {
 
   /**
    * trackError queues the event error.<area>, which the dashboard counts as an
-   * error. message is sent as the "message" prop only if allowProps lists it,
-   * and "" sends none.
+   * error. message replaces any "message" key in props, without NUL and cut to
+   * 2 KiB, and is sent only if allowProps lists "message". "" leaves props as
+   * they are.
    */
   trackError(area: string, message: string, props?: Props): void {
     this.trackEvent(`error.${area}`, undefined, withMessage(props, message));

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -22,9 +23,14 @@ const (
 	maxProps   = 16 << 10
 )
 
+// maxMessage keeps an error message within maxProps even if JSON escaping
+// grows every byte to six.
+const maxMessage = 2 << 10
+
 var namePattern = regexp.MustCompile(`^[a-z0-9_]+(\.[a-z0-9_]+)*$`)
 
-// Props is the JSON object an event carries beside its one numeric value.
+// Props is the JSON object an event carries beside its one numeric value. An
+// error value is sent as its text.
 type Props map[string]any
 
 type event struct {
@@ -131,6 +137,33 @@ func marshal(v any) ([]byte, error) {
 	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
 }
 
+// cleanMessage makes error text safe to store, so that a long or binary
+// message can't cost the event.
+func cleanMessage(s string) string {
+	s = strings.ToValidUTF8(strings.ReplaceAll(s, "\x00", ""), "�")
+	if len(s) <= maxMessage {
+		return s
+	}
+	n := maxMessage
+	for !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
+}
+
+// encodable returns the text of an error, which encoding/json would write as
+// {}. A nil pointer stays as it is, because calling Error on it can panic.
+func encodable(v any) any {
+	err, ok := v.(error)
+	if !ok {
+		return v
+	}
+	if r := reflect.ValueOf(v); r.Kind() == reflect.Pointer && r.IsNil() {
+		return v
+	}
+	return cleanMessage(err.Error())
+}
+
 // filterProps encodes the allowed keys of props and returns the names of the
 // others. It leaves props unchanged because the map is the caller's.
 func filterProps(props Props, allowed map[string]bool) (json.RawMessage, []string, error) {
@@ -138,7 +171,7 @@ func filterProps(props Props, allowed map[string]bool) (json.RawMessage, []strin
 	var dropped []string
 	for k, v := range props {
 		if allowed[k] {
-			kept[k] = v
+			kept[k] = encodable(v)
 		} else {
 			dropped = append(dropped, k)
 		}

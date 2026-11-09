@@ -6,6 +6,10 @@ const maxUserLen = 256;
 const maxAttrLen = 64;
 const maxProps = 16 << 10;
 
+// Keeps an error message within maxProps even if JSON escaping grows every
+// byte to six.
+const maxMessage = 2 << 10;
+
 const namePattern = /^[a-z0-9_]+(\.[a-z0-9_]+)*$/;
 
 /** Props is the JSON object an event carries beside its one numeric value. */
@@ -117,14 +121,30 @@ function over(s: string | undefined, limit: number): boolean {
   return s !== undefined && byteLength(s) > limit;
 }
 
+/** cleanMessage makes error text safe to store, so that a long or malformed message can't cost the event. */
+export function cleanMessage(s: string): string {
+  let out = "";
+  let size = 0;
+  for (const ch of s) {
+    if (ch === "\0") continue;
+    const c = ch.length === 1 && ch >= "\ud800" && ch <= "\udfff" ? "�" : ch;
+    size += byteLength(c);
+    if (size > maxMessage) break;
+    out += c;
+  }
+  return out;
+}
+
 /**
- * withMessage returns props with its message key set, or unchanged when message
- * is empty. Props that filterProps refuses are returned as they are for it to report.
+ * withMessage returns props with its message key set to the cleaned message,
+ * or unchanged when that is empty. Props that filterProps refuses are returned
+ * as they are for it to report.
  */
 export function withMessage(props: unknown, message: string): unknown {
+  const clean = cleanMessage(message);
   const isObject = typeof props === "object" && !Array.isArray(props);
-  if (message === "" || !(isObject || props === undefined)) return props;
-  return { ...(props as Props | null | undefined), message };
+  if (clean === "" || !(isObject || props === undefined)) return props;
+  return { ...(props as Props | null | undefined), message: clean };
 }
 
 /** filterProps keeps the allowed keys of an object and returns the names of the others. */

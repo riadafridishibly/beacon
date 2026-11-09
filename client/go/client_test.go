@@ -321,7 +321,7 @@ func TestAppOpenedOnce(t *testing.T) {
 	t.Parallel()
 	srv := newServer(t)
 	cfg := srv.config(t)
-	cfg.ProcessStartUnixMs = 1000
+	cfg.ProcessStart = time.UnixMilli(1000)
 	cfg.now = func() time.Time { return time.UnixMilli(1800) }
 	c := newClient(t, cfg)
 	must(t, c.AppOpened())
@@ -338,7 +338,7 @@ func TestPropsMustBeAllowed(t *testing.T) {
 	t.Parallel()
 	srv := newServer(t)
 	cfg := srv.config(t)
-	cfg.AllowProp("code")
+	cfg.AllowProps = []string{"code"}
 	c := newClient(t, cfg)
 	props := Props{"code": 42, "message": "secret"}
 	must(t, c.Track("error.sync", props))
@@ -366,8 +366,7 @@ func TestTrackError(t *testing.T) {
 	t.Parallel()
 	srv := newServer(t)
 	cfg := srv.config(t)
-	cfg.AllowProp("code")
-	cfg.AllowProp("message")
+	cfg.AllowProps = []string{"code", "message"}
 	c := newClient(t, cfg)
 	props := Props{"code": 42, "message": "old", "other": 1}
 	must(t, c.TrackError("engine", "boom", props))
@@ -412,12 +411,65 @@ func TestTrackErrorMessageMustBeAllowed(t *testing.T) {
 	}
 }
 
-func TestAllowPropAfterNewClientHasNoEffect(t *testing.T) {
+func TestTrackErrorCleansMessage(t *testing.T) {
+	t.Parallel()
+	srv := newServer(t)
+	cfg := srv.config(t)
+	cfg.AllowProps = []string{"message"}
+	c := newClient(t, cfg)
+	tests := []struct{ in, want string }{
+		{"a\x00b", "ab"},
+		{"a\xffb", "a�b"},
+		{strings.Repeat("€", 5000), strings.Repeat("€", 682)},
+		{strings.Repeat("\x01", 5000), strings.Repeat("\x01", maxMessage)},
+	}
+	for _, tt := range tests {
+		must(t, c.TrackError("x", tt.in, nil))
+	}
+	must(t, c.TrackError("only_nul", "\x00", Props{"message": "kept"}))
+	must(t, c.Close())
+
+	events := decodeEvents(t, srv.wait(t, 1))
+	if len(events) != len(tests)+1 {
+		t.Fatalf("got %d events", len(events))
+	}
+	for i, tt := range tests {
+		var got struct{ Message string }
+		if err := json.Unmarshal(events[i].Props, &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Message != tt.want {
+			t.Errorf("message %d: %d bytes %q", i, len(got.Message), got.Message[:min(len(got.Message), 20)])
+		}
+	}
+	if p := string(events[len(tests)].Props); p != `{"message":"kept"}` {
+		t.Errorf("props %s", p)
+	}
+}
+
+func TestErrorValuesAreSentAsText(t *testing.T) {
+	t.Parallel()
+	srv := newServer(t)
+	cfg := srv.config(t)
+	cfg.AllowProps = []string{"cause"}
+	c := newClient(t, cfg)
+	var nilErr *os.PathError
+	must(t, c.Track("a", Props{"cause": errors.New("boom")}))
+	must(t, c.Track("b", Props{"cause": nilErr}))
+	must(t, c.Close())
+
+	events := decodeEvents(t, srv.wait(t, 1))
+	if string(events[0].Props) != `{"cause":"boom"}` || string(events[1].Props) != `{"cause":null}` {
+		t.Errorf("props %s, %s", events[0].Props, events[1].Props)
+	}
+}
+
+func TestAllowPropsAfterNewClientHaveNoEffect(t *testing.T) {
 	t.Parallel()
 	srv := newServer(t)
 	cfg := srv.config(t)
 	c := newClient(t, cfg)
-	cfg.AllowProp("late")
+	cfg.AllowProps = []string{"late"}
 	must(t, c.Track("x", Props{"late": 1}))
 	must(t, c.Close())
 	if events := decodeEvents(t, srv.wait(t, 1)); events[0].Props != nil {

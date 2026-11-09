@@ -198,6 +198,27 @@ test("trackError names the event and sets message", async (t) => {
   assert.deepEqual(events[2]?.props, { message: "denied" });
 });
 
+test("trackError cleans the message", async (t) => {
+  const srv = await startServer(t);
+  const c = await createClient({ ...(await srv.options(t)), allowProps: ["message"] });
+  const tests: [string, string][] = [
+    ["a\0b", "ab"],
+    ["a\ud800b", "a�b"],
+    ["€".repeat(5000), "€".repeat(682)],
+    ["😀".repeat(1000), "😀".repeat(512)],
+    ["\x01".repeat(5000), "\x01".repeat(2048)],
+  ];
+  for (const [input] of tests) c.trackError("x", input);
+  c.trackError("only_nul", "\0", { message: "kept" });
+  await c.close();
+  const events = decode(await srv.wait(1));
+  assert.equal(events.length, tests.length + 1);
+  for (const [i, [, want]] of tests.entries()) {
+    assert.deepEqual(events[i]?.props, { message: want });
+  }
+  assert.deepEqual(events[tests.length]?.props, { message: "kept" });
+});
+
 test("trackError drops a message that is not allowed", async (t) => {
   const srv = await startServer(t);
   const c = await createClient(await srv.options(t));
