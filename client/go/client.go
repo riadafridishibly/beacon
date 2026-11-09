@@ -42,11 +42,6 @@ var processStart = time.Now()
 // ErrClosed is returned after Close.
 var ErrClosed = errors.New("beacon: client closed")
 
-// Logger receives messages about delivery problems and dropped data.
-type Logger interface {
-	Log(message string)
-}
-
 // Config configures a Client. Endpoint, Key and Dir are required.
 type Config struct {
 	// Endpoint is the server's base URL.
@@ -67,8 +62,9 @@ type Config struct {
 	MaxQueueBytes int64
 	// ProcessStart overrides the time AppOpened measures from.
 	ProcessStart time.Time
-	// Log is optional. It must not call the Client.
-	Log Logger
+	// Log receives messages about delivery problems and dropped data. It is
+	// optional and must not call the Client.
+	Log func(message string)
 	// AllowProps lists the props keys that may leave the app. Others are
 	// dropped.
 	AllowProps []string
@@ -86,7 +82,7 @@ type Client struct {
 	url, key               string
 	http                   *http.Client
 	q                      *queue
-	log                    Logger
+	log                    func(string)
 	allowed                map[string]bool
 	now                    func() time.Time
 	newID                  func() string
@@ -389,9 +385,13 @@ func (c *Client) run() {
 }
 
 func (c *Client) logf(format string, args ...any) {
-	if c.log != nil {
-		c.log.Log("beacon: " + fmt.Sprintf(format, args...))
+	if c.log == nil {
+		return
 	}
+	// Most logging happens on the background goroutine, where a panic would
+	// end the app.
+	defer func() { _ = recover() }()
+	c.log("beacon: " + fmt.Sprintf(format, args...))
 }
 
 // loadDeviceID returns the id stored in dir, creating it on first use. It

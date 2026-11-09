@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -461,6 +462,27 @@ func TestErrorValuesAreSentAsText(t *testing.T) {
 	events := decodeEvents(t, srv.wait(t, 1))
 	if string(events[0].Props) != `{"cause":"boom"}` || string(events[1].Props) != `{"cause":null}` {
 		t.Errorf("props %s, %s", events[0].Props, events[1].Props)
+	}
+}
+
+func TestPanickingLoggerDoesNotStopDelivery(t *testing.T) {
+	t.Parallel()
+	srv := newServer(t)
+	cfg := srv.config(t)
+	var message atomic.Value
+	cfg.Log = func(m string) {
+		message.Store(m)
+		panic("logger")
+	}
+	c := newClient(t, cfg)
+	must(t, c.Track("a", Props{"secret": 1}))
+	must(t, c.Close())
+
+	if events := decodeEvents(t, srv.wait(t, 1)); len(events) != 1 || events[0].Name != "a" {
+		t.Errorf("events %+v", events)
+	}
+	if got := message.Load(); got != "beacon: a: dropped props not allowed: secret" {
+		t.Errorf("logged %v", got)
 	}
 }
 
