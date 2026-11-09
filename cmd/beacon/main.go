@@ -101,7 +101,11 @@ func serve(ctx context.Context, cfg config.Config) error {
 		return err
 	}
 	defer dashPool.Close()
-	dash, err := dashboard.New(dashPool, dashboard.Config{ViteURL: cfg.ViteURL})
+	dash, err := dashboard.New(dashPool, dashboard.Config{
+		ViteURL:   cfg.ViteURL,
+		BrandName: cfg.BrandName,
+		BrandDir:  cfg.BrandDir,
+	})
 	if err != nil {
 		return err
 	}

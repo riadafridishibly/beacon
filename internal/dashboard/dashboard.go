@@ -31,6 +31,11 @@ const (
 type Config struct {
 	// ViteURL is the Vite dev server origin. Empty serves the embedded build.
 	ViteURL string
+	// BrandName is the name shown in the dashboard; empty means Beacon.
+	BrandName string
+	// BrandDir holds logo.svg and optionally favicon.svg; empty means the
+	// built-in mark.
+	BrandDir string
 	// Now is the current time; nil means time.Now.
 	Now func() time.Time
 	// RequestTimeout limits each request; zero means 20 seconds.
@@ -41,6 +46,10 @@ type Config struct {
 // the CSP and cross-origin protection for its forms.
 func New(pool *pgxpool.Pool, cfg Config) (http.Handler, error) {
 	assets, err := web.NewAssets(cfg.ViteURL)
+	if err != nil {
+		return nil, err
+	}
+	brand, err := web.NewBrand(cfg.BrandName, cfg.BrandDir)
 	if err != nil {
 		return nil, err
 	}
@@ -66,6 +75,7 @@ func New(pool *pgxpool.Pool, cfg Config) (http.Handler, error) {
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /static/assets/", web.StaticHandler())
+	brand.Routes(mux)
 	a.Routes(mux)
 	mux.Handle("/", a.RequireLogin(pages))
 
@@ -77,6 +87,7 @@ func New(pool *pgxpool.Pool, cfg Config) (http.Handler, error) {
 	var h http.Handler = mux
 	h = web.Timeout(timeout)(h)
 	h = assets.Middleware(h)
+	h = brand.Middleware(h)
 	h = http.NewCrossOriginProtection().Handler(h)
 	h = web.SecureHeaders(cfg.ViteURL)(h)
 	return h, nil

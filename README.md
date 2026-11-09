@@ -1,3 +1,5 @@
+<img src="internal/web/brand/logo.svg" alt="" width="64" height="64">
+
 # beacon
 
 A small self-hosted telemetry server. Apps send batches of events to

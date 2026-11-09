@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -125,6 +127,62 @@ func TestLogin(t *testing.T) {
 	c.cookie = old
 	if w := c.do(http.MethodGet, "/", nil); w.Code != http.StatusSeeOther {
 		t.Errorf("old cookie after logout: %d", w.Code)
+	}
+}
+
+func TestDefaultBranding(t *testing.T) {
+	t.Parallel()
+	_, c, _ := setup(t)
+
+	body := c.do(http.MethodGet, "/login", nil).Body.String()
+	for _, want := range []string{
+		"<title>Sign in · Beacon</title>",
+		`src="/static/brand/logo.svg"`,
+		`href="/static/brand/favicon.svg"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("login page lacks %s", want)
+		}
+	}
+	w := c.do(http.MethodGet, "/static/brand/logo.svg", nil)
+	if w.Code != http.StatusOK || w.Header().Get("Content-Type") != "image/svg+xml" {
+		t.Errorf("signed-out logo: %d %s", w.Code, w.Header().Get("Content-Type"))
+	}
+}
+
+func TestCustomBranding(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "logo.svg"), []byte("<svg>acme</svg>"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h, err := New(testdb.New(t), Config{ViteURL: "http://localhost:8367", BrandName: "Acme", BrandDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &client{t: t, h: h}
+
+	login := c.do(http.MethodGet, "/login", nil).Body.String()
+	missing := c.do(http.MethodGet, "/no-such-page", nil)
+	for _, body := range []string{login, missing.Body.String()} {
+		if strings.Contains(body, "Beacon") {
+			t.Errorf("page still says Beacon: %.300s", body)
+		}
+	}
+	if !strings.Contains(login, "<title>Sign in · Acme</title>") {
+		t.Errorf("title: %.300s", login)
+	}
+	for _, path := range []string{"/static/brand/logo.svg", "/static/brand/favicon.svg"} {
+		if w := c.do(http.MethodGet, path, nil); w.Body.String() != "<svg>acme</svg>" {
+			t.Errorf("%s: %d %q", path, w.Code, w.Body.String())
+		}
+	}
+}
+
+func TestBrandDirMustExist(t *testing.T) {
+	t.Parallel()
+	if _, err := New(testdb.New(t), Config{ViteURL: "http://localhost:8367", BrandDir: filepath.Join(t.TempDir(), "missing")}); err == nil {
+		t.Error("no error for a missing brand directory")
 	}
 }
 
