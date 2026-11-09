@@ -1,0 +1,87 @@
+[
+  {
+    "name": "accepted",
+    "status": 202,
+    "body": "{\"accepted\":3}",
+    "action": "accept"
+  },
+  {
+    "name": "bad event",
+    "status": 400,
+    "body": "{\"error\":\"device_id is required\",\"index\":2}",
+    "action": "drop_event",
+    "index": 2
+  },
+  {
+    "name": "bad first event",
+    "status": 400,
+    "body": "{\"error\":\"device_id is required\",\"index\":0}",
+    "action": "drop_event",
+    "index": 0
+  },
+  {
+    "name": "bad batch",
+    "status": 400,
+    "body": "{\"error\":\"no events\"}",
+    "action": "drop_batch"
+  },
+  {
+    "name": "400 from a proxy",
+    "status": 400,
+    "body": "<html>Bad Request</html>",
+    "action": "backoff"
+  },
+  {
+    "name": "rate limited",
+    "status": 429,
+    "retry_after": "7",
+    "body": "{\"error\":\"rate limit exceeded\"}",
+    "action": "retry_after",
+    "wait_seconds": 7
+  },
+  {
+    "name": "long Retry-After is capped",
+    "status": 429,
+    "retry_after": "86400",
+    "body": "{\"error\":\"rate limit exceeded\"}",
+    "action": "retry_after",
+    "wait_seconds": 3600
+  },
+  {
+    "name": "rate limited with no Retry-After",
+    "status": 429,
+    "body": "",
+    "action": "backoff"
+  },
+  {
+    "name": "Retry-After as a date",
+    "status": 429,
+    "retry_after": "Wed, 21 Oct 2026 07:28:00 GMT",
+    "body": "",
+    "action": "backoff"
+  },
+  {
+    "name": "unknown key",
+    "status": 401,
+    "body": "{\"error\":\"unknown ingest key\"}",
+    "action": "backoff"
+  },
+  {
+    "name": "server error",
+    "status": 500,
+    "body": "{\"error\":\"internal error\"}",
+    "action": "backoff"
+  },
+  {
+    "name": "bad gateway",
+    "status": 502,
+    "body": "",
+    "action": "backoff"
+  },
+  {
+    "name": "unexpected success",
+    "status": 200,
+    "body": "",
+    "action": "backoff"
+  }
+]

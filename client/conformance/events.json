@@ -1,0 +1,294 @@
+[
+  {
+    "name": "minimal",
+    "event": {
+      "device_id": "d",
+      "name": "app.open"
+    },
+    "valid": true
+  },
+  {
+    "name": "all fields",
+    "event": {
+      "name": "app.open",
+      "ts": "2026-11-08T11:59:00Z",
+      "device_id": "d",
+      "user_id": "u",
+      "session_id": "s",
+      "app_version": "1.4.0",
+      "platform": "macos",
+      "os_version": "15.1",
+      "value": 812,
+      "props": {
+        "cold": true
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "single part name",
+    "event": {
+      "device_id": "d",
+      "name": "feedback"
+    },
+    "valid": true
+  },
+  {
+    "name": "digits and underscores",
+    "event": {
+      "device_id": "d",
+      "name": "error.sync_2"
+    },
+    "valid": true
+  },
+  {
+    "name": "null props",
+    "event": {
+      "device_id": "d",
+      "name": "x",
+      "props": null
+    },
+    "valid": true
+  },
+  {
+    "name": "empty props",
+    "event": {
+      "device_id": "d",
+      "name": "x",
+      "props": {}
+    },
+    "valid": true
+  },
+  {
+    "name": "name at limit",
+    "event": {
+      "device_id": "d",
+      "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "valid": true
+  },
+  {
+    "name": "name over limit",
+    "event": {
+      "device_id": "d",
+      "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "valid": false
+  },
+  {
+    "name": "empty name",
+    "event": {
+      "device_id": "d",
+      "name": ""
+    },
+    "valid": false
+  },
+  {
+    "name": "uppercase name",
+    "event": {
+      "device_id": "d",
+      "name": "App.open"
+    },
+    "valid": false
+  },
+  {
+    "name": "space in name",
+    "event": {
+      "device_id": "d",
+      "name": "app open"
+    },
+    "valid": false
+  },
+  {
+    "name": "hyphen in name",
+    "event": {
+      "device_id": "d",
+      "name": "app-open"
+    },
+    "valid": false
+  },
+  {
+    "name": "leading dot",
+    "event": {
+      "device_id": "d",
+      "name": ".app"
+    },
+    "valid": false
+  },
+  {
+    "name": "trailing dot",
+    "event": {
+      "device_id": "d",
+      "name": "app."
+    },
+    "valid": false
+  },
+  {
+    "name": "double dot",
+    "event": {
+      "device_id": "d",
+      "name": "app..open"
+    },
+    "valid": false
+  },
+  {
+    "name": "no device id",
+    "event": {
+      "name": "x"
+    },
+    "valid": false
+  },
+  {
+    "name": "device_id at limit",
+    "event": {
+      "device_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "name": "x"
+    },
+    "valid": true
+  },
+  {
+    "name": "device_id over limit",
+    "event": {
+      "device_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "name": "x"
+    },
+    "valid": false
+  },
+  {
+    "name": "session_id at limit",
+    "event": {
+      "device_id": "d",
+      "name": "x",
+      "session_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "valid": true
+  },
+  {
+    "name": "session_id over limit",
+    "event": {
+      "device_id": "d",
+      "name": "x",
+      "session_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "valid": false
+  },
+  {
+    "name": "user_id at limit",
+    "event": {
+      "device_id": "d",
+      "name": "x",
+      "user_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "valid": true
+  },
+  {
+    "name": "user_id over limit",
+    "event": {
+      "device_id": "d",
+      "name": "x",
+      "user_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "valid": false
+  },
+  {
+    "name": "app_version at limit",
+    "event": {
+      "device_id": "d",
+      "name": "x",
+      "app_version": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "valid": true
+  },
+  {
+    "name": "app_version over limit",
+    "event": {
+      "device_id": "d",
+      "name": "x",
+      "app_version": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "valid": false
+  },
+  {
+    "name": "platform at limit",
+    "event": {
+      "device_id": "d",
+      "name": "x",
+      "platform": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "valid": true
+  },
+  {
+    "name": "platform over limit",
+    "event": {
+      "device_id": "d",
+      "name": "x",
+      "platform": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "valid": false
+  },
+  {
+    "name": "os_version at limit",
+    "event": {
+      "device_id": "d",
+      "name": "x",
+      "os_version": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "valid": true
+  },
+  {
+    "name": "os_version over limit",
+    "event": {
+      "device_id": "d",
+      "name": "x",
+      "os_version": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "valid": false
+  },
+  {
+    "name": "props at limit",
+    "event": {
+      "device_id": "d",
+      "name": "x"
+    },
+    "valid": true,
+    "props_size": 16384
+  },
+  {
+    "name": "props over limit",
+    "event": {
+      "device_id": "d",
+      "name": "x"
+    },
+    "valid": false,
+    "props_size": 16385
+  },
+  {
+    "name": "props array",
+    "event": {
+      "device_id": "d",
+      "name": "x",
+      "props": [
+        1
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "props string",
+    "event": {
+      "device_id": "d",
+      "name": "x",
+      "props": "a"
+    },
+    "valid": false
+  },
+  {
+    "name": "props number",
+    "event": {
+      "device_id": "d",
+      "name": "x",
+      "props": 1
+    },
+    "valid": false
+  }
+]

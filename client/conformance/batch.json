@@ -1,0 +1,39 @@
+{
+  "events": [
+    {
+      "name": "session.start",
+      "ts": "2026-11-08T11:59:00Z",
+      "device_id": "fixed-id",
+      "user_id": "tester@example.com",
+      "session_id": "fixed-id",
+      "app_version": "1.4.0",
+      "platform": "macos",
+      "os_version": "15.1"
+    },
+    {
+      "name": "sync.done",
+      "ts": "2026-11-08T11:59:00Z",
+      "device_id": "fixed-id",
+      "user_id": "tester@example.com",
+      "session_id": "fixed-id",
+      "app_version": "1.4.0",
+      "platform": "macos",
+      "os_version": "15.1",
+      "value": 812,
+      "props": {
+        "cold": true
+      }
+    },
+    {
+      "name": "session.end",
+      "ts": "2026-11-08T11:59:00Z",
+      "device_id": "fixed-id",
+      "user_id": "tester@example.com",
+      "session_id": "fixed-id",
+      "app_version": "1.4.0",
+      "platform": "macos",
+      "os_version": "15.1",
+      "value": 0
+    }
+  ]
+}
