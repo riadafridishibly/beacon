@@ -2,7 +2,7 @@ use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -235,6 +235,100 @@ fn retries_after_transport_error() {
     client.track("a", Props::new()).unwrap();
     client.flush();
     assert_eq!(names(&events(&fake.wait(1))), "a");
+}
+
+struct PanickingTransport {
+    fake: Arc<Fake>,
+    remaining: AtomicU32,
+}
+
+impl Transport for PanickingTransport {
+    fn post(&self, request: Request) -> Result<Response, TransportError> {
+        if self.remaining.fetch_sub(1, Ordering::SeqCst) > 0 {
+            panic!("transport");
+        }
+        self.fake.post(request)
+    }
+}
+
+#[test]
+fn retries_after_transport_panic() {
+    let fake = Fake::new();
+    let (mut cfg, _dir) = config(&fake);
+    cfg.transport = Arc::new(PanickingTransport {
+        fake: Arc::clone(&fake),
+        remaining: AtomicU32::new(2),
+    });
+    let client = start(&cfg, tuning());
+    client.track("a", Props::new()).unwrap();
+    client.flush();
+    assert_eq!(names(&events(&fake.wait(1))), "a");
+}
+
+struct GatedTransport {
+    fake: Arc<Fake>,
+    gate: Mutex<mpsc::Receiver<()>>,
+}
+
+impl Transport for GatedTransport {
+    fn post(&self, request: Request) -> Result<Response, TransportError> {
+        let _ = self.gate.lock().unwrap().recv();
+        self.fake.post(request)
+    }
+}
+
+#[test]
+fn drop_stops_sending() {
+    let fake = Fake::new();
+    let (mut cfg, _dir) = config(&fake);
+    let (open, gate) = mpsc::channel();
+    cfg.transport = Arc::new(GatedTransport {
+        fake: Arc::clone(&fake),
+        gate: Mutex::new(gate),
+    });
+    let client = start(
+        &cfg,
+        Tuning {
+            batch_events: 1,
+            ..tuning()
+        },
+    );
+    for name in ["a", "b", "c"] {
+        client.track(name, Props::new()).unwrap();
+    }
+    let inner = Arc::clone(&client.inner);
+    drop(client);
+    drop(open);
+    inner.wait_done();
+
+    assert!(fake.calls() <= 1, "{} requests after drop", fake.calls());
+    assert!(inner.queue.oldest().is_some());
+}
+
+#[test]
+fn zero_queue_cap_means_the_default() {
+    let fake = Fake::new();
+    let (mut cfg, _dir) = config(&fake);
+    cfg.max_queue_bytes = 0;
+    let client = start(&cfg, tuning());
+    for name in ["a", "b"] {
+        client.track(name, Props::new()).unwrap();
+    }
+    client.close().unwrap();
+    let bodies = fake.wait(1);
+    assert_eq!(bodies.len(), 1);
+    assert_eq!(names(&events(&bodies)), "a b");
+}
+
+#[test]
+fn device_id_that_is_not_utf8_is_replaced() {
+    let fake = Fake::new();
+    let (cfg, dir) = config(&fake);
+    let path = dir.path().join("device_id");
+    fs::write(&path, [0xff, 0xfe]).unwrap();
+    let client = start(&cfg, tuning());
+    assert!(!client.device_id().is_empty());
+    assert_eq!(fs::read_to_string(&path).unwrap(), client.device_id());
 }
 
 #[test]
@@ -569,11 +663,15 @@ fn user_id_is_opt_in() {
 fn rejects_bad_config() {
     let fake = Fake::new();
     let (good, _dir) = config(&fake);
-    let cases: [fn(&mut Config); 7] = [
+    let cases: [fn(&mut Config); 11] = [
         |c| c.endpoint = String::new(),
         |c| c.endpoint = "ftp://x".into(),
         |c| c.endpoint = "http://".into(),
         |c| c.endpoint = "http:// x".into(),
+        |c| c.endpoint = "http://?x=1".into(),
+        |c| c.endpoint = "https://#frag".into(),
+        |c| c.endpoint = "http:///v1".into(),
+        |c| c.endpoint = "http://x?y=1".into(),
         |c| c.key = String::new(),
         |c| c.dir = "".into(),
         |c| c.app_version = "a".repeat(65),
@@ -583,6 +681,14 @@ fn rejects_bad_config() {
         change(&mut cfg);
         assert!(Client::new(cfg).is_err(), "case {i} accepted");
     }
+}
+
+#[test]
+fn endpoint_scheme_ignores_case() {
+    let fake = Fake::new();
+    let (mut cfg, _dir) = config(&fake);
+    cfg.endpoint = "HTTPS://example.com/base/".into();
+    assert!(Client::with_tuning(cfg, tuning()).is_ok());
 }
 
 fn open_queue(dir: &Path, max_bytes: u64, max_events: usize) -> (Queue, Arc<AtomicU64>) {

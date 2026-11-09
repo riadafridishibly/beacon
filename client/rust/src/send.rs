@@ -12,32 +12,31 @@ pub type TransportError = Box<dyn std::error::Error + Send + Sync>;
 
 /// Request is one POST for a Transport to send.
 pub struct Request {
-    /// The full URL.
+    /// url is the full URL.
     pub url: String,
-    /// The headers to set, by name.
+    /// headers lists the headers to set, by name.
     pub headers: Vec<(&'static str, String)>,
-    /// The body, already compressed.
+    /// body is already compressed.
     pub body: Vec<u8>,
-    /// How long the whole request may take.
+    /// timeout is how long the whole request may take.
     pub timeout: Duration,
 }
 
 /// Response is what a Transport got back. Any status is a Response, not an
 /// error.
 pub struct Response {
-    /// The HTTP status.
+    /// status is the HTTP status.
     pub status: u16,
-    /// The Retry-After header, if there is one.
+    /// retry_after is the Retry-After header, if there is one.
     pub retry_after: Option<String>,
-    /// The body. The first 64 KiB is enough.
+    /// body is the response body. The first 64 KiB is enough.
     pub body: Vec<u8>,
 }
 
-/// Transport sends requests, so that an app can use its own HTTP client. It
-/// runs on the client's background thread, may block there, and must honour
-/// the request's timeout.
+/// Transport sends requests with the app's own HTTP client, on a background
+/// thread that it may block. It must honour the request's timeout.
 pub trait Transport: Send + Sync {
-    /// Post sends one request and waits for the response.
+    /// post sends one request and waits for the response.
     fn post(&self, request: Request) -> Result<Response, TransportError>;
 }
 
@@ -84,6 +83,8 @@ struct ServerError {
 pub(crate) fn classify(status: u16, retry_after: Option<&str>, body: &[u8]) -> Outcome {
     match status {
         202 => Action::Accept.into(),
+        // A derived Deserialize also reads a JSON array, as the fields in order.
+        400 if !body.trim_ascii_start().starts_with(b"{") => Action::Backoff.into(),
         400 => match serde_json::from_slice::<ServerError>(body) {
             Ok(ServerError { error, .. }) if error.is_empty() => Action::Backoff.into(),
             Ok(ServerError {

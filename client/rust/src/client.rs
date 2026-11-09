@@ -39,13 +39,13 @@ pub type LogFn = Arc<dyn Fn(&str) + Send + Sync>;
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum Error {
-    /// The client has been closed.
+    /// Closed means the client has been closed.
     Closed,
-    /// The configuration can't be used.
+    /// Config means the configuration can't be used.
     Config(String),
-    /// The event breaks one of the server's rules.
+    /// Invalid means the event breaks one of the server's rules.
     Invalid(String),
-    /// The queue or the device id could not be read or written.
+    /// Io means the queue or the device id could not be read or written.
     Io(io::Error),
 }
 
@@ -77,29 +77,31 @@ impl From<io::Error> for Error {
 /// Config configures a Client.
 #[derive(Clone)]
 pub struct Config {
-    /// The server's base URL.
+    /// endpoint is the server's base URL.
     pub endpoint: String,
-    /// The app's ingest key.
+    /// key is the app's ingest key.
     pub key: String,
-    /// Holds the queue and the device id. Use one Client per directory.
+    /// dir holds the queue and the device id. Use one Client per directory.
     pub dir: PathBuf,
-    /// Sends the requests.
+    /// transport sends the requests.
     pub transport: Arc<dyn Transport>,
-    /// The app's version.
+    /// app_version is the app's version.
     pub app_version: String,
-    /// Defaults to the operating system: macos, windows, linux, ios or android.
+    /// platform defaults to the operating system: macos, windows, linux, ios
+    /// or android.
     pub platform: String,
-    /// The operating system's version.
+    /// os_version is the operating system's version.
     pub os_version: String,
-    /// Caps the queue on disk, 10 MiB by default. Past it the oldest events
-    /// are dropped.
+    /// max_queue_bytes caps the queue on disk, 0 meaning 10 MiB. Past it the
+    /// oldest events are dropped.
     pub max_queue_bytes: u64,
-    /// The time app_opened measures from, by default when the Client is
-    /// created.
+    /// process_start is the time app_opened measures from, by default when
+    /// the Client is created.
     pub process_start: Option<SystemTime>,
-    /// Receives messages about delivery problems and dropped data.
+    /// log receives messages about delivery problems and dropped data.
     pub log: Option<LogFn>,
-    /// The props keys that may leave the app. Others are dropped.
+    /// allow_props lists the props keys that may leave the app. Others are
+    /// dropped.
     pub allow_props: Vec<String>,
 }
 
@@ -120,7 +122,7 @@ impl Config {
             app_version: String::new(),
             platform: String::new(),
             os_version: String::new(),
-            max_queue_bytes: DEFAULT_MAX_QUEUE_BYTES,
+            max_queue_bytes: 0,
             process_start: None,
             log: None,
             allow_props: Vec::new(),
@@ -209,9 +211,8 @@ pub(crate) struct Inner {
     finished: Condvar,
 }
 
-/// Client queues and sends events. Its methods are safe to call from any
-/// thread. Dropping it stops sending without waiting; close gives queued
-/// events a last chance to go out.
+/// Client queues and sends events, and is safe to use from any thread.
+/// Dropping it stops sending at once; close lets queued events go out first.
 pub struct Client {
     pub(crate) inner: Arc<Inner>,
     close_once: Once,
@@ -260,7 +261,10 @@ impl Client {
         };
         let queue = Queue::open(
             &config.dir.join("queue"),
-            config.max_queue_bytes,
+            match config.max_queue_bytes {
+                0 => DEFAULT_MAX_QUEUE_BYTES,
+                n => n,
+            },
             tuning.batch_events,
             MAX_BATCH_BYTES,
             on_drop,
@@ -377,9 +381,8 @@ impl Client {
         self.inner.notify();
     }
 
-    /// close ends any open session and makes one last attempt to send, for a
-    /// few seconds at most. It blocks for that long. Unsent events stay on
-    /// disk for the next run.
+    /// close ends any open session and blocks for a few seconds at most while
+    /// it tries to send. Unsent events stay on disk for the next run.
     pub fn close(&self) -> Result<(), Error> {
         let mut result = Ok(());
         self.close_once.call_once(|| {
@@ -393,6 +396,7 @@ impl Client {
 
 impl Drop for Client {
     fn drop(&mut self) {
+        self.inner.cancelled.store(true, Ordering::SeqCst);
         self.inner.begin_stop();
     }
 }
@@ -495,7 +499,7 @@ impl Inner {
 
     /// Waits for the worker to finish, up to close_wait. A transport can't be
     /// interrupted, so past that the worker is left to end on its own.
-    fn wait_done(&self) {
+    pub(crate) fn wait_done(&self) {
         let (_done, timeout) = self
             .finished
             .wait_timeout_while(lock(&self.done), self.tuning.close_wait, |done| !*done)
@@ -638,7 +642,7 @@ impl Worker {
 
     fn send(&self, lines: &[Vec<u8>]) -> Result<Outcome, Box<dyn std::error::Error + Send + Sync>> {
         let inner = &self.inner;
-        let response = inner.transport.post(Request {
+        let request = Request {
             url: inner.url.clone(),
             headers: vec![
                 ("Authorization", format!("Bearer {}", inner.key)),
@@ -647,7 +651,10 @@ impl Worker {
             ],
             body: encode_batch(lines)?,
             timeout: REQUEST_TIMEOUT,
-        })?;
+        };
+        // Without this, a panic would silently end delivery.
+        let response = panic::catch_unwind(AssertUnwindSafe(|| inner.transport.post(request)))
+            .map_err(|_| "transport panicked")??;
         if response.status != 202 {
             let body = String::from_utf8_lossy(&response.body);
             let body: String = body.chars().take(500).collect();
@@ -691,13 +698,14 @@ impl Worker {
 }
 
 fn valid_endpoint(endpoint: &str) -> bool {
-    let rest = endpoint
-        .strip_prefix("http://")
-        .or_else(|| endpoint.strip_prefix("https://"));
-    rest.is_some_and(|rest| {
-        let host = rest.split('/').next().unwrap_or_default();
-        !host.is_empty() && !rest.contains(char::is_whitespace)
-    })
+    let Some((scheme, rest)) = endpoint.split_once("://") else {
+        return false;
+    };
+    let host = rest.split('/').next().unwrap_or_default();
+    (scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https"))
+        && !host.is_empty()
+        // A query or fragment would swallow the /v1/events appended to it.
+        && !rest.contains(|c: char| c.is_whitespace() || c == '?' || c == '#')
 }
 
 /// Returns the id stored in dir, creating it on first use. It is random and
@@ -708,7 +716,13 @@ fn load_device_id(dir: &Path, new_id: &dyn Fn() -> io::Result<String>) -> io::Re
     match fs::read_to_string(&path) {
         Ok(text) if !text.trim().is_empty() => return Ok(text.trim().to_string()),
         Ok(_) => {}
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        // InvalidData is a file that isn't UTF-8, which would otherwise keep
+        // the client from starting on every launch.
+        Err(e)
+            if matches!(
+                e.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::InvalidData
+            ) => {}
         Err(e) => return Err(e),
     }
     let id = new_id()?;
