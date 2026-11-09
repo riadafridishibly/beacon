@@ -25,3 +25,6 @@ ORDER BY a.id;
 
 -- name: GetApp :one
 SELECT * FROM apps WHERE id = @id;
+
+-- name: DeleteApp :exec
+DELETE FROM apps WHERE id = @id;

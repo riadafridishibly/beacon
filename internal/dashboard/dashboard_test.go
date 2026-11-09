@@ -29,7 +29,7 @@ type client struct {
 func setup(t *testing.T) (*pgxpool.Pool, *client, string) {
 	t.Helper()
 	pool := testdb.New(t)
-	h, err := New(pool, Config{ViteURL: "http://localhost:8341", Now: func() time.Time { return now }})
+	h, err := New(pool, Config{ViteURL: "http://localhost:8367", Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestLogin(t *testing.T) {
 	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/login?next=%2Fnew-app" {
 		t.Fatalf("signed out: %d %s", w.Code, w.Header().Get("Location"))
 	}
-	if !strings.Contains(w.Header().Get("Content-Security-Policy"), "script-src 'self' http://localhost:8341") {
+	if !strings.Contains(w.Header().Get("Content-Security-Policy"), "script-src 'self' http://localhost:8367") {
 		t.Errorf("CSP = %q", w.Header().Get("Content-Security-Policy"))
 	}
 

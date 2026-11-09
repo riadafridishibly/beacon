@@ -38,13 +38,13 @@ func TestAssetsFromManifestMissing(t *testing.T) {
 
 func TestDevAssets(t *testing.T) {
 	t.Parallel()
-	a, err := NewAssets("http://localhost:8341/")
+	a, err := NewAssets("http://localhost:8367/")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(a.tags, `<link rel="stylesheet" href="http://localhost:8341/src/app.css">`) ||
-		!strings.Contains(a.tags, `src="http://localhost:8341/@vite/client"`) ||
-		!strings.Contains(a.tags, `src="http://localhost:8341/src/main.ts"`) {
+	if !strings.HasPrefix(a.tags, `<link rel="stylesheet" href="http://localhost:8367/src/app.css">`) ||
+		!strings.Contains(a.tags, `src="http://localhost:8367/@vite/client"`) ||
+		!strings.Contains(a.tags, `src="http://localhost:8367/src/main.ts"`) {
 		t.Errorf("dev tags = %s", a.tags)
 	}
 }

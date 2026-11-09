@@ -14,7 +14,8 @@ the repo. Don't add docs files.
 
 - `make setup`: install pnpm packages (once).
 - `make db-setup`: create the `beacon` database (once). `make db-up` starts Postgres in Docker instead.
-- `make dev`: Vite plus the server with live reload; open http://localhost:7331.
+- `make dev`: Vite plus the server with live reload; open http://localhost:7350.
+- `make seed`: add or replace a `demo` app with 90 days of generated events.
 - `make gen`: regenerate Go from `*.templ` and `internal/db/queries/*.sql`. Run it after editing either.
 - `make check`: gen, templ fmt, go vet, golangci-lint, go test, tsc, biome, frontend build. **Work is done only when this passes.**
 
@@ -22,6 +23,7 @@ the repo. Don't add docs files.
 
 ```
 cmd/beacon/          serve, migrate, app create|key|list, user create|reset
+cmd/seed/            generated demo data for development
 frontend/src/        main.ts (htmx setup), app.css (Tailwind + daisyUI theme)
 internal/config/     BEACON_* environment
 internal/db/         Connect, Migrate, migrations/, queries/, sqlc output (don't edit generated files)
