@@ -24,6 +24,8 @@ the repo. Don't add docs files.
 ```
 cmd/beacon/          serve, migrate, app create|key|list|revoke, user create|reset
 cmd/seed/            generated demo data for development
+client/go/           Go client, its own module, standard library only, gomobile-bindable
+client/conformance/  cases every client and the server must pass
 frontend/src/        main.ts (htmx setup), app.css (Tailwind + daisyUI theme)
 internal/config/     BEACON_* environment
 internal/db/         Connect, Migrate, migrations/, queries/, sqlc output (don't edit generated files)
@@ -41,6 +43,7 @@ internal/testdb/     per-test databases copied from a migrated template
 - Tests run against real Postgres via `testdb.New(t)`, never mocks. Call `t.Parallel()`.
 - Never edit a shipped migration; add a new one.
 - Go code calls sqlc methods and never builds SQL strings.
+- A change to what POST /v1/events accepts updates `client/conformance/` and every client in the same change.
 - Never store client IP addresses. Geo lookup happens at ingest and the address is dropped.
 - The CSP forbids inline scripts, inline styles and eval: no `<script>` blocks, `style=""`, `onclick=""` or `hx-on:*` in templates.
 

@@ -167,6 +167,31 @@ func TestIngestRejects(t *testing.T) {
 	}
 }
 
+func TestIngestRejectsWhatPostgresCantStore(t *testing.T) {
+	t.Parallel()
+	pool, h, key := setup(t)
+	for _, tt := range []struct {
+		name, props string
+		wantIndex   bool
+	}{
+		{"invalid UTF-8", "{\"p\":\"\xff\"}", true},
+		{"number too large", `{"p":1e200000}`, false},
+		{"number too small", `{"p":1e-200000}`, false},
+	} {
+		body := `{"events":[{"name":"ok","device_id":"d"},{"name":"x","device_id":"d","props":` + tt.props + `}]}`
+		rec := post(t, h, key, []byte(body), false)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: status %d, want 400: %s", tt.name, rec.Code, rec.Body)
+		}
+		if got := strings.Contains(rec.Body.String(), `"index":1`); got != tt.wantIndex {
+			t.Errorf("%s: index in body = %v, want %v: %s", tt.name, got, tt.wantIndex, rec.Body)
+		}
+	}
+	if n := len(load(t, pool)); n != 0 {
+		t.Errorf("%d rows stored from rejected batches", n)
+	}
+}
+
 func TestIngestBodyLimit(t *testing.T) {
 	t.Parallel()
 	_, h, key := setup(t)
