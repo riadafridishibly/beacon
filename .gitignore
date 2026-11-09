@@ -1,6 +1,7 @@
 /bin/
 /node_modules/
 /client/ts/dist/
+/client/rust/target/
 .env
 *.mmdb
 

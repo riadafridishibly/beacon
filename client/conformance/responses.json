@@ -32,6 +32,18 @@
     "action": "backoff"
   },
   {
+    "name": "400 with a JSON array naming an event",
+    "status": 400,
+    "body": "[\"blocked\",0]",
+    "action": "backoff"
+  },
+  {
+    "name": "400 with a JSON array",
+    "status": 400,
+    "body": "[\"blocked\"]",
+    "action": "backoff"
+  },
+  {
     "name": "rate limited",
     "status": 429,
     "retry_after": "7",
