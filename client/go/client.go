@@ -197,12 +197,12 @@ func (c *Client) Track(name string, props Props) error {
 	return c.track(name, nil, props)
 }
 
-// TrackError queues the event error.<area>, which the dashboard counts as an
-// error. message replaces any "message" key in props, without NUL and cut to
-// 2 KiB, and is sent only if AllowProps lists "message". "" leaves props as
-// they are.
+// TrackError queues error.<area>, counted as an error by the dashboard. A
+// non-empty message, cut to 2 KiB, replaces props["message"] if allowed.
 func (c *Client) TrackError(area, message string, props Props) error {
-	if message = cleanMessage(message); message != "" {
+	// A message that isn't allowed stays out of props, or every error would
+	// log a drop.
+	if message = cleanMessage(message); message != "" && c.allowed["message"] {
 		props = maps.Clone(props)
 		if props == nil {
 			props = Props{}

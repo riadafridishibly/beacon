@@ -221,12 +221,36 @@ test("trackError cleans the message", async (t) => {
 
 test("trackError drops a message that is not allowed", async (t) => {
   const srv = await startServer(t);
-  const c = await createClient(await srv.options(t));
+  const logs: string[] = [];
+  const c = await createClient({ ...(await srv.options(t)), log: (m) => logs.push(m) });
   c.trackError("engine", "secret");
   await c.close();
   const events = decode(await srv.wait(1));
   assert.equal(events[0]?.name, "error.engine");
   assert.equal(events[0]?.props, undefined);
+  assert.deepEqual(logs, []);
+});
+
+test("trackError accepts a message of the wrong type", async (t) => {
+  const srv = await startServer(t);
+  const c = await createClient({ ...(await srv.options(t)), allowProps: ["message"] });
+  c.trackError("a", new Error("boom") as never);
+  c.trackError("b", 42 as never);
+  c.trackError("c", undefined as never);
+  await c.close();
+  const events = decode(await srv.wait(1));
+  assert.deepEqual(events[0]?.props, { message: "boom" });
+  assert.deepEqual(events[1]?.props, { message: "42" });
+  assert.equal(events[2]?.props, undefined);
+});
+
+test("Error values are sent as their message", async (t) => {
+  const srv = await startServer(t);
+  const c = await createClient({ ...(await srv.options(t)), allowProps: ["cause"] });
+  c.track("a", { cause: new Error("boom") });
+  await c.close();
+  const events = decode(await srv.wait(1));
+  assert.deepEqual(events[0]?.props, { cause: "boom" });
 });
 
 test("user id is opt in", async (t) => {

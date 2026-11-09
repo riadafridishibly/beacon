@@ -404,11 +404,17 @@ func TestTrackError(t *testing.T) {
 func TestTrackErrorMessageMustBeAllowed(t *testing.T) {
 	t.Parallel()
 	srv := newServer(t)
-	c := newClient(t, srv.config(t))
+	cfg := srv.config(t)
+	var logged atomic.Int32
+	cfg.Log = func(string) { logged.Add(1) }
+	c := newClient(t, cfg)
 	must(t, c.TrackError("engine", "secret", nil))
 	must(t, c.Close())
 	if e := decodeEvents(t, srv.wait(t, 1))[0]; e.Name != "error.engine" || e.Props != nil {
 		t.Errorf("event %s %s", e.Name, e.Props)
+	}
+	if n := logged.Load(); n != 0 {
+		t.Errorf("logged %d messages", n)
 	}
 }
 
@@ -457,13 +463,19 @@ func TestErrorValuesAreSentAsText(t *testing.T) {
 	var nilErr *os.PathError
 	must(t, c.Track("a", Props{"cause": errors.New("boom")}))
 	must(t, c.Track("b", Props{"cause": nilErr}))
+	must(t, c.Track("c", Props{"cause": panicError{}}))
 	must(t, c.Close())
 
 	events := decodeEvents(t, srv.wait(t, 1))
-	if string(events[0].Props) != `{"cause":"boom"}` || string(events[1].Props) != `{"cause":null}` {
-		t.Errorf("props %s, %s", events[0].Props, events[1].Props)
+	if string(events[0].Props) != `{"cause":"boom"}` || string(events[1].Props) != `{"cause":null}` ||
+		string(events[2].Props) != `{"cause":{}}` {
+		t.Errorf("props %s, %s, %s", events[0].Props, events[1].Props, events[2].Props)
 	}
 }
+
+type panicError struct{}
+
+func (panicError) Error() string { panic("Error") }
 
 func TestPanickingLoggerDoesNotStopDelivery(t *testing.T) {
 	t.Parallel()

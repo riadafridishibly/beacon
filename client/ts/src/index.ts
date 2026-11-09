@@ -1,5 +1,6 @@
 import {
   BeaconError,
+  cleanMessage,
   filterProps,
   type Props,
   validate,
@@ -150,13 +151,13 @@ export class Client {
   }
 
   /**
-   * trackError queues the event error.<area>, which the dashboard counts as an
-   * error. message replaces any "message" key in props, without NUL and cut to
-   * 2 KiB, and is sent only if allowProps lists "message". "" leaves props as
-   * they are.
+   * trackError queues error.<area>, counted as an error by the dashboard. A
+   * non-empty message, cut to 2 KiB, replaces props.message if allowed.
    */
   trackError(area: string, message: string, props?: Props): void {
-    this.trackEvent(`error.${area}`, undefined, withMessage(props, message));
+    // A message that isn't allowed stays out of props, or every error would log a drop.
+    const clean = this.allowed.has("message") ? cleanMessage(message) : "";
+    this.trackEvent(`error.${area}`, undefined, withMessage(props, clean));
   }
 
   /** trackValue queues an event with its one numeric measure, such as a duration in ms. */

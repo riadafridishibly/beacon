@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -29,8 +28,8 @@ const maxMessage = 2 << 10
 
 var namePattern = regexp.MustCompile(`^[a-z0-9_]+(\.[a-z0-9_]+)*$`)
 
-// Props is the JSON object an event carries beside its one numeric value. An
-// error value is sent as its text.
+// Props is the JSON object an event carries beside its one numeric value. A
+// top-level error value is sent as its text.
 type Props map[string]any
 
 type event struct {
@@ -152,15 +151,17 @@ func cleanMessage(s string) string {
 }
 
 // encodable returns the text of an error, which encoding/json would write as
-// {}. A nil pointer stays as it is, because calling Error on it can panic.
-func encodable(v any) any {
+// {}. If Error panics, as it can on a nil pointer, v stays as it is.
+func encodable(v any) (out any) {
 	err, ok := v.(error)
 	if !ok {
 		return v
 	}
-	if r := reflect.ValueOf(v); r.Kind() == reflect.Pointer && r.IsNil() {
-		return v
-	}
+	defer func() {
+		if recover() != nil {
+			out = v
+		}
+	}()
 	return cleanMessage(err.Error())
 }
 
