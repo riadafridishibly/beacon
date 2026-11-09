@@ -37,6 +37,13 @@ func window(rng string, now time.Time) (since, until time.Time, days []time.Time
 	return since, until, days
 }
 
+func parseRange(rng string) string {
+	if _, ok := rangeDays[rng]; !ok && rng != "24h" {
+		return defaultRange
+	}
+	return rng
+}
+
 type overviewView struct {
 	App     db.App
 	Range   string
@@ -59,11 +66,7 @@ type breakdownView struct {
 }
 
 func (d *dashboard) overview(w http.ResponseWriter, r *http.Request) error {
-	rng := r.URL.Query().Get("range")
-	if _, ok := rangeDays[rng]; !ok && rng != "24h" {
-		rng = defaultRange
-	}
-	v, err := d.loadOverview(r.Context(), r.PathValue("id"), rng)
+	v, err := d.loadOverview(r.Context(), r.PathValue("id"), parseRange(r.URL.Query().Get("range")))
 	if err != nil {
 		return err
 	}
