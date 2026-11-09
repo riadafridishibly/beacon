@@ -2,13 +2,10 @@ package dashboard
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math"
 	"net/http"
 	"time"
-
-	"github.com/jackc/pgx/v5"
 
 	"github.com/riadafridishibly/beacon/internal/auth"
 	"github.com/riadafridishibly/beacon/internal/db"
@@ -67,9 +64,6 @@ func (d *dashboard) overview(w http.ResponseWriter, r *http.Request) error {
 		rng = defaultRange
 	}
 	v, err := d.loadOverview(r.Context(), r.PathValue("id"), rng)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return web.ErrNotFound
-	}
 	if err != nil {
 		return err
 	}
@@ -80,7 +74,7 @@ func (d *dashboard) overview(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (d *dashboard) loadOverview(ctx context.Context, appID, rng string) (overviewView, error) {
-	app, err := d.q.GetApp(ctx, appID)
+	app, err := d.app(ctx, appID)
 	if err != nil {
 		return overviewView{}, err
 	}

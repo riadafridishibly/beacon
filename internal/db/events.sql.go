@@ -6,6 +6,7 @@
 package db
 
 import (
+	"context"
 	"encoding/json"
 	"time"
 )
@@ -24,4 +25,76 @@ type InsertEventsParams struct {
 	City       *string
 	Value      *float64
 	Props      json.RawMessage
+}
+
+const listEvents = `-- name: ListEvents :many
+SELECT id, app_id, name, ts, received_at, device_id, user_id, session_id, app_version, platform, os_version, country, city, value, props
+FROM events
+WHERE app_id = $1
+  AND (ts, id) < ($2::timestamptz, $3::bigint)
+  AND ($4::text IS NULL OR name = $4)
+  AND ($5::text IS NULL OR device_id = $5)
+  AND ($6::text IS NULL OR user_id = $6)
+  AND ($7::text IS NULL OR country = $7)
+  AND ($8::text IS NULL OR app_version = $8)
+ORDER BY ts DESC, id DESC
+LIMIT $9
+`
+
+type ListEventsParams struct {
+	AppID      string
+	BeforeTs   time.Time
+	BeforeID   int64
+	Name       *string
+	DeviceID   *string
+	UserID     *string
+	Country    *string
+	AppVersion *string
+	PageLimit  int32
+}
+
+func (q *Queries) ListEvents(ctx context.Context, arg ListEventsParams) ([]Event, error) {
+	rows, err := q.db.Query(ctx, listEvents,
+		arg.AppID,
+		arg.BeforeTs,
+		arg.BeforeID,
+		arg.Name,
+		arg.DeviceID,
+		arg.UserID,
+		arg.Country,
+		arg.AppVersion,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Event{}
+	for rows.Next() {
+		var i Event
+		if err := rows.Scan(
+			&i.ID,
+			&i.AppID,
+			&i.Name,
+			&i.Ts,
+			&i.ReceivedAt,
+			&i.DeviceID,
+			&i.UserID,
+			&i.SessionID,
+			&i.AppVersion,
+			&i.Platform,
+			&i.OSVersion,
+			&i.Country,
+			&i.City,
+			&i.Value,
+			&i.Props,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

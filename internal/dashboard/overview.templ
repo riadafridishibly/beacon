@@ -9,14 +9,33 @@ import (
 
 templ overviewPage(nav *web.Nav, v overviewView) {
 	@web.Layout(v.App.Name, nav) {
-		<nav aria-label="Breadcrumb" class="mb-1 text-sm opacity-70">
-			<a href="/" class="link-hover">Apps</a>
-		</nav>
-		@web.PageHeader(v.App.Name)
+		@appHeader(v.App, "overview")
 		<div id="overview" class="transition-opacity [&.htmx-request]:opacity-60">
 			@overviewBody(v)
 		</div>
 	}
+}
+
+// appHeader is the title and page tabs shared by an app's pages.
+templ appHeader(app db.App, current string) {
+	<nav aria-label="Breadcrumb" class="mb-1 text-sm opacity-70">
+		<a href="/" class="link-hover">Apps</a>
+	</nav>
+	@web.PageHeader(app.Name)
+	<nav aria-label="App pages" class="tabs tabs-border -mt-2 mb-6 -ml-3">
+		@appTab("Overview", "/apps/"+app.ID, current == "overview")
+		@appTab("Events", eventsURL(app.ID, eventFilter{}, ""), current == "events")
+	</nav>
+}
+
+templ appTab(label, href string, active bool) {
+	<a
+		href={ templ.SafeURL(href) }
+		if active {
+			aria-current="page"
+		}
+		class={ "tab", templ.KV("tab-active", active) }
+	>{ label }</a>
 }
 
 func rangeURL(appID, rng string) string { return "/apps/" + appID + "?range=" + rng }
