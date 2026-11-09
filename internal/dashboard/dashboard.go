@@ -1,14 +1,16 @@
 // Package dashboard serves the web UI: sign-in, the app list, creating apps,
-// and each app's overview.
+// and each app's overview and events.
 package dashboard
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
 	"time"
 	"unicode/utf8"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/riadafridishibly/beacon/internal/apps"
@@ -42,6 +44,7 @@ func New(pool *pgxpool.Pool, cfg Config) (http.Handler, error) {
 	pages.Handle("GET /{$}", web.Handle(d.appList))
 	pages.Handle("GET /new-app", web.Handle(d.newApp))
 	pages.Handle("GET /apps/{id}", web.Handle(d.overview))
+	pages.Handle("GET /apps/{id}/events", web.Handle(d.events))
 	pages.Handle("POST /apps", web.Handle(d.createApp))
 	pages.Handle("/", web.Handle(func(http.ResponseWriter, *http.Request) error { return web.ErrNotFound }))
 
@@ -68,6 +71,19 @@ func (d *dashboard) now() time.Time {
 		return d.nowFunc()
 	}
 	return time.Now()
+}
+
+// app returns web.ErrNotFound for an unknown id, including one PostgreSQL
+// couldn't accept as text.
+func (d *dashboard) app(ctx context.Context, id string) (db.App, error) {
+	if !apps.ValidID(id) {
+		return db.App{}, web.ErrNotFound
+	}
+	app, err := d.q.GetApp(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return db.App{}, web.ErrNotFound
+	}
+	return app, err
 }
 
 func (d *dashboard) appList(w http.ResponseWriter, r *http.Request) error {

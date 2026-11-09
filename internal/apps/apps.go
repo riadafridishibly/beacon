@@ -34,9 +34,12 @@ var ErrBadID = errors.New("app id must be 1-63 lowercase letters, digits or dash
 // ErrExists is returned when creating an app whose id is taken.
 var ErrExists = errors.New("an app with that id already exists")
 
+// ValidID reports whether id is a well-formed app id.
+func ValidID(id string) bool { return idPattern.MatchString(id) }
+
 // Create adds an app with its first ingest key and returns the key.
 func Create(ctx context.Context, pool *pgxpool.Pool, id, name string) (string, error) {
-	if !idPattern.MatchString(id) {
+	if !ValidID(id) {
 		return "", ErrBadID
 	}
 	if name == "" {
