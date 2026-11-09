@@ -1,0 +1,9 @@
+[Unit]
+Description=Update the GeoIP database and restart beacon
+
+[Service]
+Type=oneshot
+Environment=BEACON_GEOIP_DB=%h/beacon/geoip/city.mmdb
+EnvironmentFile=%h/beacon/.env
+ExecStart=%h/beacon/scripts/geoip-update.sh
+ExecStart=/usr/bin/systemctl --user restart beacon.service

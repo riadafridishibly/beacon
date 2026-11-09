@@ -1,0 +1,17 @@
+[Unit]
+Description=beacon telemetry server
+# A user unit can't order itself after the system's PostgreSQL, so at boot
+# it retries until the database is up.
+StartLimitIntervalSec=0
+
+[Service]
+Environment=BEACON_TRUSTED_PROXIES=127.0.0.1
+Environment=BEACON_GEOIP_DB=%h/beacon/geoip/city.mmdb
+EnvironmentFile=%h/beacon/.env
+ExecStart=%h/beacon/bin/beacon serve
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target
