@@ -25,6 +25,11 @@ type Config struct {
 	IngestIPRate int
 	// IngestKeyRate is the requests per second one ingest key can sustain.
 	IngestKeyRate int
+	// BrandName replaces Beacon as the name shown in the dashboard.
+	BrandName string
+	// BrandDir holds logo.svg and optionally favicon.svg, which replace the
+	// built-in mark.
+	BrandDir string
 }
 
 func Load() (Config, error) {
@@ -32,6 +37,8 @@ func Load() (Config, error) {
 		DatabaseURL: env("BEACON_DATABASE_URL", "postgres://localhost:5432/beacon?sslmode=disable"),
 		Listen:      env("BEACON_LISTEN", "127.0.0.1:8178"),
 		GeoIPPath:   os.Getenv("BEACON_GEOIP_DB"),
+		BrandName:   os.Getenv("BEACON_BRAND_NAME"),
+		BrandDir:    os.Getenv("BEACON_BRAND_DIR"),
 	}
 	if os.Getenv("BEACON_DEV") == "1" {
 		c.ViteURL = env("BEACON_VITE_URL", "http://localhost:8367")

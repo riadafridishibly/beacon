@@ -27,6 +27,18 @@ func TestTrustedProxies(t *testing.T) {
 	}
 }
 
+func TestBrand(t *testing.T) {
+	t.Setenv("BEACON_BRAND_NAME", "Acme")
+	t.Setenv("BEACON_BRAND_DIR", "/etc/beacon/brand")
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.BrandName != "Acme" || c.BrandDir != "/etc/beacon/brand" {
+		t.Errorf("got %q, %q", c.BrandName, c.BrandDir)
+	}
+}
+
 func TestIngestRates(t *testing.T) {
 	for _, tc := range []struct {
 		env      string

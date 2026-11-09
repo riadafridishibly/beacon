@@ -8,8 +8,8 @@ templ Document(title string) {
 			<meta charset="utf-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1"/>
 			<meta name="robots" content="noindex"/>
-			<title>{ title } · Beacon</title>
-			<link rel="icon" href="data:,"/>
+			<title>{ title } · { BrandName(ctx) }</title>
+			<link rel="icon" type="image/svg+xml" href={ templ.SafeURL(brandFaviconPath) }/>
 			@AssetTags()
 		</head>
 		<body class="min-h-screen bg-base-200 text-base-content antialiased">
@@ -32,7 +32,10 @@ templ Layout(title string, nav *Nav) {
 	@Document(title) {
 		<header class="border-b border-base-300 bg-base-100">
 			<nav class="navbar mx-auto max-w-6xl gap-4 px-4">
-				<a href="/" class="flex-1 text-lg font-semibold tracking-tight">Beacon</a>
+				<a href="/" class="flex flex-1 items-center gap-2 text-lg font-semibold tracking-tight">
+					<img src={ brandLogoPath } alt="" width="24" height="24" class="size-6"/>
+					{ BrandName(ctx) }
+				</a>
 				if nav != nil {
 					<span class="text-sm opacity-70 max-sm:hidden">{ nav.Email }</span>
 					<form method="post" action={ templ.SafeURL(nav.LogoutPath) }>
