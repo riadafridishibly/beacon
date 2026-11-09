@@ -11,3 +11,6 @@
 
 # templ watch-mode artifacts
 *_templ.txt
+
+# Server-specific deployment files
+/deploy/local/

@@ -6,6 +6,11 @@ set -euo pipefail
 host=${1:?usage: deploy.sh user@server}
 cd "$(dirname "$0")/.."
 
+if [ "$(ssh "$host" 'loginctl show-user "$(id -un)" --property=Linger')" != Linger=yes ]; then
+	echo "$host: run 'loginctl enable-linger' for the deploy user first, or the service stops at logout" >&2
+	exit 1
+fi
+
 ssh "$host" 'mkdir -p beacon/bin beacon/scripts beacon/geoip .config/systemd/user'
 if ! ssh "$host" 'test -f beacon/.env'; then
 	echo "$host: create ~/beacon/.env with BEACON_DATABASE_URL first" >&2
@@ -19,7 +24,9 @@ scp -q bin/linux-amd64/beacon "$host:beacon/bin/beacon.new"
 ssh "$host" bash -s <<'REMOTE'
 set -euo pipefail
 cd ~/beacon/bin
-if [ -e beacon ]; then ln -f beacon beacon.prev; fi
+# Only a healthy binary becomes the rollback target, so retrying a failed
+# deploy keeps the last good one.
+if curl -fsS http://127.0.0.1:8178/healthz >/dev/null 2>&1; then ln -f beacon beacon.prev; fi
 mv beacon.new beacon
 
 systemctl --user daemon-reload
@@ -37,7 +44,7 @@ for _ in $(seq 30); do
 	fi
 	sleep 1
 done
-journalctl --user -u beacon.service -n 30 --no-pager
+journalctl --user -u beacon.service -n 30 --no-pager || true
 echo "not healthy after 30s; the previous binary is ~/beacon/bin/beacon.prev" >&2
 exit 1
 REMOTE
