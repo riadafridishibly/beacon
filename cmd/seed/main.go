@@ -80,7 +80,26 @@ func seed(ctx context.Context, pool *pgxpool.Pool, now time.Time) (int64, error)
 	if _, err := apps.Create(ctx, pool, appID, appName); err != nil {
 		return 0, err
 	}
+	if err := rotateKey(ctx, q); err != nil {
+		return 0, err
+	}
 	return q.InsertEvents(ctx, generate(now, rand.New(rand.NewPCG(1, 2))))
+}
+
+// rotateKey revokes the demo app's key and adds a new one, so the keys page
+// shows both states.
+func rotateKey(ctx context.Context, q *db.Queries) error {
+	keys, err := q.ListAppKeys(ctx, appID)
+	if err != nil {
+		return err
+	}
+	for _, k := range keys {
+		if _, err := apps.Revoke(ctx, q, k.Prefix); err != nil {
+			return err
+		}
+	}
+	_, err = apps.NewKey(ctx, q, appID)
+	return err
 }
 
 type place struct {
@@ -129,14 +148,15 @@ var (
 )
 
 type device struct {
-	id                string
-	user              *string
-	place             place
-	platform          platform
-	osVersion         string
-	firstDay, lastDay int
-	activity          float64
-	updateLag         int
+	id                     string
+	user, nextUser         *string
+	signInDay, nextUserDay int
+	place                  place
+	platform               platform
+	osVersion              string
+	firstDay, lastDay      int
+	activity               float64
+	updateLag              int
 }
 
 func pick[T any](rng *rand.Rand, list []T) T { return list[rng.IntN(len(list))] }
@@ -167,11 +187,36 @@ func newDevice(rng *rand.Rand) device {
 		d.lastDay = d.firstDay + rng.IntN(days-d.firstDay)
 	}
 	if rng.Float64() < 0.6 {
-		// More devices than users, so some users have several devices.
-		u := fmt.Sprintf("user-%02d", rng.IntN(userCount))
-		d.user = &u
+		d.user = newUser(rng)
+		// Clients can set the user at any time, so a device can start out
+		// anonymous or pass to someone else.
+		if rng.Float64() < 0.3 {
+			d.signInDay = d.firstDay + rng.IntN(d.lastDay-d.firstDay+1)
+		}
+		if rng.Float64() < 0.2 {
+			from := max(d.firstDay, d.signInDay)
+			d.nextUser = newUser(rng)
+			d.nextUserDay = from + rng.IntN(d.lastDay-from+1)
+		}
 	}
 	return d
+}
+
+// newUser picks from fewer users than there are devices, so some users have
+// several devices.
+func newUser(rng *rand.Rand) *string {
+	u := fmt.Sprintf("user-%02d", rng.IntN(userCount))
+	return &u
+}
+
+func (d device) userOn(dayIndex int) *string {
+	switch {
+	case dayIndex < d.signInDay:
+		return nil
+	case d.nextUser != nil && dayIndex >= d.nextUserDay:
+		return d.nextUser
+	}
+	return d.user
 }
 
 func (d device) versionOn(dayIndex int) string {
@@ -203,7 +248,7 @@ func generate(now time.Time, rng *rand.Rand) []db.InsertEventsParams {
 				continue
 			}
 			for range 1 + rng.IntN(2) {
-				s.run(d, date, d.versionOn(i))
+				s.run(d, d.userOn(i), date, d.versionOn(i))
 			}
 		}
 	}
@@ -217,7 +262,7 @@ type session struct {
 	events []db.InsertEventsParams
 }
 
-func (s *session) run(d device, date time.Time, version string) {
+func (s *session) run(d device, user *string, date time.Time, version string) {
 	rng := s.rng
 	localHour := 9 + 14*rng.Float64()
 	start := date.Add(time.Duration((localHour - float64(d.place.utcOffset)) * float64(time.Hour)))
@@ -228,7 +273,7 @@ func (s *session) run(d device, date time.Time, version string) {
 			return
 		}
 		e := db.InsertEventsParams{
-			AppID: appID, Name: name, Ts: ts, DeviceID: d.id, UserID: d.user, SessionID: &id,
+			AppID: appID, Name: name, Ts: ts, DeviceID: d.id, UserID: user, SessionID: &id,
 			AppVersion: &version, Platform: &d.platform.name, OSVersion: &d.osVersion,
 			Country: &d.place.country, City: &d.place.city, Value: value,
 		}
@@ -258,7 +303,7 @@ func (s *session) run(d device, date time.Time, version string) {
 	if rng.Float64() < 0.2 {
 		add("export.finished", during(), num(math.Round(logNormal(rng, 1500, 0.7))), map[string]any{"format": pick(rng, formats)})
 	}
-	if d.user != nil && rng.Float64() < 0.01 {
+	if user != nil && rng.Float64() < 0.01 {
 		add("feedback", during(), nil, map[string]any{"text": "The new search is much easier to use."})
 	}
 
