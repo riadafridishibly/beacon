@@ -7,7 +7,7 @@ A small self-hosted telemetry server. Apps send batches of events to
 make setup                          # pnpm install
 make db-setup                       # or: make db-up
 go run ./cmd/beacon user create you@example.com  # prints a dashboard password
-make dev                            # open http://localhost:7331
+make dev                            # open http://localhost:7350
 ```
 
 Create apps in the dashboard, or with `beacon app create my-app "My App"`,

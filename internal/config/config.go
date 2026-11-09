@@ -24,11 +24,11 @@ type Config struct {
 func Load() (Config, error) {
 	c := Config{
 		DatabaseURL: env("BEACON_DATABASE_URL", "postgres://localhost:5432/beacon?sslmode=disable"),
-		Listen:      env("BEACON_LISTEN", "127.0.0.1:8080"),
+		Listen:      env("BEACON_LISTEN", "127.0.0.1:8178"),
 		GeoIPPath:   os.Getenv("BEACON_GEOIP_DB"),
 	}
 	if os.Getenv("BEACON_DEV") == "1" {
-		c.ViteURL = env("BEACON_VITE_URL", "http://localhost:8341")
+		c.ViteURL = env("BEACON_VITE_URL", "http://localhost:8367")
 	}
 	for _, s := range strings.Split(os.Getenv("BEACON_TRUSTED_PROXIES"), ",") {
 		s = strings.TrimSpace(s)

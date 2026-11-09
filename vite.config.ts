@@ -3,7 +3,7 @@ import tailwindcss from "@tailwindcss/vite";
 import { defineConfig, type Plugin } from "vite";
 
 // The app in `make dev`: templ's proxy in front of the Go server.
-const appURL = "http://localhost:7331";
+const appURL = "http://localhost:7350";
 
 // This dev server only serves CSS/JS to pages rendered by Go. Print the app
 // URL instead of Vite's, and send / to the app.
@@ -35,9 +35,9 @@ export default defineConfig(({ command }) => ({
   base: command === "build" ? "/static/" : "/",
   plugins: [tailwindcss(), pointToApp()],
   server: {
-    port: 8341,
+    port: 8367,
     strictPort: true,
-    origin: "http://localhost:8341",
+    origin: "http://localhost:8367",
   },
   build: {
     outDir: "../internal/web/dist",

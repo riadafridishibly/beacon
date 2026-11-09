@@ -9,7 +9,7 @@ PG_ADMIN_URL        ?= postgres://localhost:5432/postgres?sslmode=disable
 BEACON_DATABASE_URL ?= postgres://localhost:5432/beacon?sslmode=disable
 export BEACON_DATABASE_URL
 
-.PHONY: help setup db-setup db-up dev dev-vite dev-go gen fmt check test build frontend build-linux clean
+.PHONY: help setup db-setup db-up dev dev-vite dev-go seed gen fmt check test build frontend build-linux clean
 
 help: ## List targets
 	@grep -E '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
@@ -24,7 +24,7 @@ db-setup: ## Create the beacon database on PG_ADMIN_URL
 db-up: ## Start PostgreSQL 17 in Docker instead of a local server
 	docker compose up -d --wait db
 
-dev: ## Vite + Go with live reload; open http://localhost:7331
+dev: ## Vite + Go with live reload; open http://localhost:7350
 	@$(MAKE) -j2 dev-vite dev-go
 
 dev-vite:
@@ -32,7 +32,10 @@ dev-vite:
 
 dev-go: export BEACON_DEV = 1
 dev-go:
-	go tool templ generate -watch -proxy=http://127.0.0.1:8080 -open-browser=false -cmd="go run ./cmd/beacon serve"
+	go tool templ generate -watch -proxy=http://127.0.0.1:8178 -proxyport=7350 -open-browser=false -cmd="go run ./cmd/beacon serve"
+
+seed: ## Replace the demo app in the local database with generated events
+	go run ./cmd/seed
 
 gen: ## Generate Go from the .templ and .sql files
 	go tool templ generate
