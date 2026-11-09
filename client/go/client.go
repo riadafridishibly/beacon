@@ -1,7 +1,5 @@
 // Package beacon sends telemetry events to a beacon server. Events wait in
 // an on-disk queue and go out in gzipped batches.
-//
-// The exported API that apps need uses only types gomobile can bind.
 package beacon
 
 import (
@@ -38,9 +36,7 @@ const (
 	maxBatchBytes = 900 << 10
 )
 
-// processStart is the closest a Go package can get to process start. In a
-// gomobile library it is when the library loads, so apps there should set
-// Config.ProcessStartUnixMs.
+// processStart is the closest a Go package can get to process start.
 var processStart = time.Now()
 
 // ErrClosed is returned after Close.
@@ -201,38 +197,41 @@ func (c *Client) SetUserID(id string) {
 	c.userID = id
 }
 
-// Track queues an event. propsJSON is a JSON object, or "" for none. Report
-// errors with TrackError: the dashboard counts only names starting "error.".
-func (c *Client) Track(name, propsJSON string) error {
-	return c.track(name, nil, propsJSON)
+// Track queues an event. props may be nil. Report errors with TrackError: the
+// dashboard counts only names starting "error.".
+func (c *Client) Track(name string, props Props) error {
+	return c.track(name, nil, props)
 }
 
 // TrackError queues the event error.<area>, which the dashboard counts as an
 // error. message is sent as the "message" prop only if AllowProp permits it,
-// and "" sends none. propsJSON is a JSON object of other props, or "".
-func (c *Client) TrackError(area, message, propsJSON string) error {
-	props, err := withMessage(propsJSON, message)
-	if err != nil {
-		return err
+// and "" sends none.
+func (c *Client) TrackError(area, message string, props Props) error {
+	if message != "" {
+		props = maps.Clone(props)
+		if props == nil {
+			props = Props{}
+		}
+		props["message"] = message
 	}
 	return c.track("error."+area, nil, props)
 }
 
 // TrackValue queues an event with its one numeric measure, such as a
 // duration in milliseconds.
-func (c *Client) TrackValue(name string, value float64, propsJSON string) error {
-	return c.track(name, &value, propsJSON)
+func (c *Client) TrackValue(name string, value float64, props Props) error {
+	return c.track(name, &value, props)
 }
 
-func (c *Client) track(name string, value *float64, propsJSON string) error {
-	props, dropped, err := filterProps(propsJSON, c.allowed)
+func (c *Client) track(name string, value *float64, props Props) error {
+	encoded, dropped, err := filterProps(props, c.allowed)
 	if err != nil {
 		return err
 	}
 	if len(dropped) > 0 {
 		c.logf("%s: dropped props not allowed: %s", name, strings.Join(dropped, ", "))
 	}
-	return c.enqueue(name, value, props)
+	return c.enqueue(name, value, encoded)
 }
 
 // AppOpened records app.open once per process, with the time since process

@@ -161,7 +161,7 @@ func TestSendsWhenBatchIsFull(t *testing.T) {
 	cfg.batchEvents = 3
 	c := newClient(t, cfg)
 	for _, name := range []string{"a", "b", "c"} {
-		must(t, c.Track(name, ""))
+		must(t, c.Track(name, nil))
 	}
 	if got := names(decodeEvents(t, srv.wait(t, 1))); got != "a b c" {
 		t.Errorf("events %q", got)
@@ -174,7 +174,7 @@ func TestSendsOnInterval(t *testing.T) {
 	cfg := srv.config(t)
 	cfg.flushEvery = 5 * time.Millisecond
 	c := newClient(t, cfg)
-	must(t, c.Track("a", ""))
+	must(t, c.Track("a", nil))
 	if got := names(decodeEvents(t, srv.wait(t, 1))); got != "a" {
 		t.Errorf("events %q", got)
 	}
@@ -190,7 +190,7 @@ func TestRetriesAfterServerError(t *testing.T) {
 		return -1, ""
 	}
 	c := newClient(t, srv.config(t))
-	must(t, c.Track("a", ""))
+	must(t, c.Track("a", nil))
 	c.Flush()
 	if got := names(decodeEvents(t, srv.wait(t, 1))); got != "a" {
 		t.Errorf("events %q", got)
@@ -210,7 +210,7 @@ func TestBadEventIsDroppedAndRestResent(t *testing.T) {
 	cfg.batchEvents = 3
 	c := newClient(t, cfg)
 	for _, name := range []string{"a", "b", "c"} {
-		must(t, c.Track(name, ""))
+		must(t, c.Track(name, nil))
 	}
 	if got := names(decodeEvents(t, srv.wait(t, 1))); got != "a c" {
 		t.Errorf("events %q", got)
@@ -227,7 +227,7 @@ func TestBadBatchIsDropped(t *testing.T) {
 		return -1, ""
 	}
 	c := newClient(t, srv.config(t))
-	must(t, c.Track("a", ""))
+	must(t, c.Track("a", nil))
 	c.Flush()
 	deadline := time.Now().Add(10 * time.Second)
 	for c.q.oldest() != nil {
@@ -236,7 +236,7 @@ func TestBadBatchIsDropped(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	must(t, c.Track("b", ""))
+	must(t, c.Track("b", nil))
 	c.Flush()
 	if got := names(decodeEvents(t, srv.wait(t, 1))); got != "b" {
 		t.Errorf("events %q", got)
@@ -251,9 +251,9 @@ func TestQueueSurvivesRestart(t *testing.T) {
 	}
 	cfg := srv.config(t)
 	c := newClient(t, cfg)
-	must(t, c.Track("a", ""))
+	must(t, c.Track("a", nil))
 	must(t, c.Close())
-	if err := c.Track("b", ""); !errors.Is(err, ErrClosed) {
+	if err := c.Track("b", nil); !errors.Is(err, ErrClosed) {
 		t.Errorf("Track after Close: %v", err)
 	}
 
@@ -292,12 +292,12 @@ func TestSessionEvents(t *testing.T) {
 		return current
 	}
 	c := newClient(t, cfg)
-	must(t, c.Track("before", ""))
+	must(t, c.Track("before", nil))
 	must(t, c.StartSession())
 	must(t, c.StartSession())
 	time.Sleep(30 * time.Millisecond)
 	must(t, c.EndSession())
-	must(t, c.Track("after", ""))
+	must(t, c.Track("after", nil))
 	must(t, c.Close())
 
 	events := decodeEvents(t, srv.wait(t, 1))
@@ -340,18 +340,24 @@ func TestPropsMustBeAllowed(t *testing.T) {
 	cfg := srv.config(t)
 	cfg.AllowProp("code")
 	c := newClient(t, cfg)
-	must(t, c.Track("error.sync", `{"code":42,"message":"secret"}`))
-	must(t, c.Track("x", `{"message":"secret"}`))
-	if err := c.Track("x", `[1]`); err == nil {
-		t.Error("array props accepted")
+	props := Props{"code": 42, "message": "secret"}
+	must(t, c.Track("error.sync", props))
+	if len(props) != 2 {
+		t.Errorf("caller's props changed: %v", props)
 	}
-	if err := c.Track("Bad Name", ""); err == nil {
+	must(t, c.Track("x", Props{"message": "secret"}))
+	must(t, c.Track("big", Props{"code": int64(1<<53 + 1)}))
+	if err := c.Track("x", Props{"code": make(chan int)}); err == nil {
+		t.Error("unencodable props accepted")
+	}
+	if err := c.Track("Bad Name", nil); err == nil {
 		t.Error("bad name accepted")
 	}
 	must(t, c.Close())
 
 	events := decodeEvents(t, srv.wait(t, 1))
-	if len(events) != 2 || string(events[0].Props) != `{"code":42}` || events[1].Props != nil {
+	if len(events) != 3 || string(events[0].Props) != `{"code":42}` || events[1].Props != nil ||
+		string(events[2].Props) != `{"code":9007199254740993}` {
 		t.Errorf("events %+v", events)
 	}
 }
@@ -363,13 +369,20 @@ func TestTrackError(t *testing.T) {
 	cfg.AllowProp("code")
 	cfg.AllowProp("message")
 	c := newClient(t, cfg)
-	must(t, c.TrackError("engine", "boom", `{"code":42,"message":"old","other":1}`))
-	must(t, c.TrackError("sync", "", ""))
-	must(t, c.TrackError("auth", "denied", "null"))
-	for _, bad := range [][3]string{{"", "m", ""}, {"Bad Area", "m", ""}, {"x", "m", "[1]"}, {"x", "", "[1]"}} {
-		if err := c.TrackError(bad[0], bad[1], bad[2]); err == nil {
-			t.Errorf("TrackError%q accepted", bad)
+	props := Props{"code": 42, "message": "old", "other": 1}
+	must(t, c.TrackError("engine", "boom", props))
+	if props["message"] != "old" {
+		t.Errorf("caller's props changed: %v", props)
+	}
+	must(t, c.TrackError("sync", "", nil))
+	must(t, c.TrackError("auth", "denied", nil))
+	for _, area := range []string{"", "Bad Area"} {
+		if err := c.TrackError(area, "m", nil); err == nil {
+			t.Errorf("area %q accepted", area)
 		}
+	}
+	if err := c.TrackError("x", "m", Props{"code": make(chan int)}); err == nil {
+		t.Error("unencodable props accepted")
 	}
 	must(t, c.Close())
 
@@ -392,7 +405,7 @@ func TestTrackErrorMessageMustBeAllowed(t *testing.T) {
 	t.Parallel()
 	srv := newServer(t)
 	c := newClient(t, srv.config(t))
-	must(t, c.TrackError("engine", "secret", ""))
+	must(t, c.TrackError("engine", "secret", nil))
 	must(t, c.Close())
 	if e := decodeEvents(t, srv.wait(t, 1))[0]; e.Name != "error.engine" || e.Props != nil {
 		t.Errorf("event %s %s", e.Name, e.Props)
@@ -405,7 +418,7 @@ func TestAllowPropAfterNewClientHasNoEffect(t *testing.T) {
 	cfg := srv.config(t)
 	c := newClient(t, cfg)
 	cfg.AllowProp("late")
-	must(t, c.Track("x", `{"late":1}`))
+	must(t, c.Track("x", Props{"late": 1}))
 	must(t, c.Close())
 	if events := decodeEvents(t, srv.wait(t, 1)); events[0].Props != nil {
 		t.Errorf("props %s", events[0].Props)
@@ -425,9 +438,9 @@ func TestUserIDIsOptIn(t *testing.T) {
 	t.Parallel()
 	srv := newServer(t)
 	c := newClient(t, srv.config(t))
-	must(t, c.Track("a", ""))
+	must(t, c.Track("a", nil))
 	c.SetUserID("tester")
-	must(t, c.Track("b", ""))
+	must(t, c.Track("b", nil))
 	must(t, c.Close())
 	events := decodeEvents(t, srv.wait(t, 1))
 	if events[0].UserID != "" || events[1].UserID != "tester" {

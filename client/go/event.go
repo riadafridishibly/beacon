@@ -24,6 +24,9 @@ const (
 
 var namePattern = regexp.MustCompile(`^[a-z0-9_]+(\.[a-z0-9_]+)*$`)
 
+// Props is the JSON object an event carries beside its one numeric value.
+type Props map[string]any
+
 type event struct {
 	Name       string          `json:"name"`
 	TS         *time.Time      `json:"ts,omitempty"`
@@ -128,50 +131,24 @@ func marshal(v any) ([]byte, error) {
 	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
 }
 
-// withMessage returns propsJSON with its message key set, or unchanged when
-// message is empty.
-func withMessage(propsJSON, message string) (string, error) {
-	if message == "" {
-		return propsJSON, nil
-	}
-	var props map[string]json.RawMessage
-	if propsJSON != "" {
-		if err := json.Unmarshal([]byte(propsJSON), &props); err != nil {
-			return "", errors.New("beacon: props must be a JSON object")
-		}
-	}
-	if props == nil {
-		props = make(map[string]json.RawMessage, 1)
-	}
-	m, err := marshal(message)
-	if err != nil {
-		return "", err
-	}
-	props["message"] = m
-	b, err := marshal(props)
-	return string(b), err
-}
-
-// filterProps keeps the allowed keys of a JSON object and returns the names
-// of the others.
-func filterProps(propsJSON string, allowed map[string]bool) (json.RawMessage, []string, error) {
-	if propsJSON == "" {
-		return nil, nil, nil
-	}
-	var props map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(propsJSON), &props); err != nil {
-		return nil, nil, errors.New("beacon: props must be a JSON object")
-	}
+// filterProps encodes the allowed keys of props and returns the names of the
+// others. It leaves props unchanged because the map is the caller's.
+func filterProps(props Props, allowed map[string]bool) (json.RawMessage, []string, error) {
+	kept := make(Props, len(props))
 	var dropped []string
-	for k := range props {
-		if !allowed[k] {
+	for k, v := range props {
+		if allowed[k] {
+			kept[k] = v
+		} else {
 			dropped = append(dropped, k)
-			delete(props, k)
 		}
 	}
-	if len(props) == 0 {
+	if len(kept) == 0 {
 		return nil, dropped, nil
 	}
-	b, err := marshal(props)
-	return b, dropped, err
+	b, err := marshal(kept)
+	if err != nil {
+		return nil, dropped, fmt.Errorf("beacon: props: %w", err)
+	}
+	return b, dropped, nil
 }

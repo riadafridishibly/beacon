@@ -34,11 +34,11 @@ func TestConformanceEvents(t *testing.T) {
 	allowed := map[string]bool{"p": true, "p\x00": true, "cold": true}
 
 	for _, tt := range cases {
-		props := string(tt.Event.Props)
+		raw := tt.Event.Props
 		if tt.PropsSize > 0 {
-			props = fmt.Sprintf(`{"p":%q}`, strings.Repeat("a", tt.PropsSize-len(`{"p":""}`)))
+			raw = fmt.Appendf(nil, `{"p":%q}`, strings.Repeat("a", tt.PropsSize-len(`{"p":""}`)))
 		}
-		filtered, _, err := filterProps(props, allowed)
+		filtered, err := filterRaw(raw, allowed)
 		e := tt.Event
 		e.Props = filtered
 		if err == nil {
@@ -48,6 +48,24 @@ func TestConformanceEvents(t *testing.T) {
 			t.Errorf("%s: valid = %v, want %v: %v", tt.Name, got, tt.Valid, err)
 		}
 	}
+}
+
+// filterRaw keeps each value as raw JSON so that the unpaired surrogates in
+// the cases reach validate. A Go string can't hold them.
+func filterRaw(raw json.RawMessage, allowed map[string]bool) (json.RawMessage, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var values map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &values); err != nil {
+		return nil, err
+	}
+	props := make(Props, len(values))
+	for k, v := range values {
+		props[k] = v
+	}
+	filtered, _, err := filterProps(props, allowed)
+	return filtered, err
 }
 
 func TestConformanceResponses(t *testing.T) {
@@ -88,7 +106,7 @@ func TestConformanceBatch(t *testing.T) {
 
 	c.SetUserID("tester@example.com")
 	must(t, c.StartSession())
-	must(t, c.TrackValue("sync.done", 812, `{"cold":true}`))
+	must(t, c.TrackValue("sync.done", 812, Props{"cold": true}))
 	must(t, c.Close())
 
 	var got any
