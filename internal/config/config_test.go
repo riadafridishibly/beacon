@@ -27,23 +27,34 @@ func TestTrustedProxies(t *testing.T) {
 	}
 }
 
-func TestIngestKeyRate(t *testing.T) {
-	t.Setenv("BEACON_INGEST_KEY_RATE", "")
-	c, err := Load()
-	if err != nil || c.IngestKeyRate != 50 {
-		t.Errorf("default: %d, %v", c.IngestKeyRate, err)
-	}
+func TestIngestRates(t *testing.T) {
+	for _, tc := range []struct {
+		env      string
+		fallback int
+		get      func(Config) int
+	}{
+		{"BEACON_INGEST_IP_RATE", 1, func(c Config) int { return c.IngestIPRate }},
+		{"BEACON_INGEST_KEY_RATE", 50, func(c Config) int { return c.IngestKeyRate }},
+	} {
+		t.Run(tc.env, func(t *testing.T) {
+			t.Setenv(tc.env, "")
+			c, err := Load()
+			if err != nil || tc.get(c) != tc.fallback {
+				t.Errorf("default: %d, %v", tc.get(c), err)
+			}
 
-	t.Setenv("BEACON_INGEST_KEY_RATE", "200")
-	c, err = Load()
-	if err != nil || c.IngestKeyRate != 200 {
-		t.Errorf("set: %d, %v", c.IngestKeyRate, err)
-	}
+			t.Setenv(tc.env, "200")
+			c, err = Load()
+			if err != nil || tc.get(c) != 200 {
+				t.Errorf("set: %d, %v", tc.get(c), err)
+			}
 
-	for _, v := range []string{"0", "-1", "many"} {
-		t.Setenv("BEACON_INGEST_KEY_RATE", v)
-		if _, err := Load(); err == nil {
-			t.Errorf("%q: no error", v)
-		}
+			for _, v := range []string{"0", "-1", "many"} {
+				t.Setenv(tc.env, v)
+				if _, err := Load(); err == nil {
+					t.Errorf("%q: no error", v)
+				}
+			}
+		})
 	}
 }

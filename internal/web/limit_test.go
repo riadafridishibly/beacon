@@ -22,7 +22,28 @@ func TestLimiterTake(t *testing.T) {
 	}
 
 	l.max = len(l.buckets)
-	if ok, wait := l.Take("c"); ok || wait != sweepEvery {
+	if ok, wait := l.Take("c"); ok || wait != fullSweepEvery {
 		t.Errorf("table full: %v, %v", ok, wait)
+	}
+}
+
+func TestLimiterSweepsWhenFull(t *testing.T) {
+	t.Parallel()
+	l := NewLimiter(time.Nanosecond, 1)
+	l.max = 1
+	if !l.Allow("a") {
+		t.Fatal("first key refused")
+	}
+
+	if ok, wait := l.Take("b"); ok || wait != fullSweepEvery {
+		t.Errorf("swept too soon: %v, %v", ok, wait)
+	}
+
+	l.lastSweep = time.Now().Add(-2 * fullSweepEvery)
+	if !l.Allow("b") {
+		t.Error("full table of refilled buckets was not swept")
+	}
+	if _, tracked := l.buckets["a"]; tracked {
+		t.Error("refilled bucket survived the sweep")
 	}
 }

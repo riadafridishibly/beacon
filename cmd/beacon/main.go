@@ -92,6 +92,10 @@ func serve(ctx context.Context, cfg config.Config) error {
 		slog.Warn("BEACON_GEOIP_DB is not set; events get no country or city")
 	}
 
+	if len(cfg.TrustedProxies) == 0 {
+		slog.Warn("BEACON_TRUSTED_PROXIES is not set; behind a reverse proxy, all clients share one rate limit and get no country or city")
+	}
+
 	dash, err := dashboard.New(pool, dashboard.Config{ViteURL: cfg.ViteURL})
 	if err != nil {
 		return err
@@ -104,9 +108,9 @@ func serve(ctx context.Context, cfg config.Config) error {
 		Apps: apps.NewResolver(q),
 		DB:   q,
 		Geo:  loc,
-		// One request a second covers about 30 devices behind one NAT, at
-		// the two batches a minute a client sends.
-		ByIP: web.NewLimiter(time.Second, 60),
+		// The default of one request a second covers about 30 devices
+		// behind one NAT, at the two batches a minute a client sends.
+		ByIP: web.NewLimiter(time.Second/time.Duration(cfg.IngestIPRate), 60*cfg.IngestIPRate),
 		// Every install of an app shares its key, so this limit grows with
 		// the number of installs.
 		ByKey: web.NewLimiter(time.Second/time.Duration(cfg.IngestKeyRate), 10*cfg.IngestKeyRate),

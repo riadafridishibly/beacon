@@ -20,6 +20,9 @@ type Config struct {
 	// ViteURL is the Vite dev server the dashboard loads its CSS and JS
 	// from, set when BEACON_DEV=1. Empty serves the embedded build.
 	ViteURL string
+	// IngestIPRate is the requests per second one client address can
+	// sustain on ingest.
+	IngestIPRate int
 	// IngestKeyRate is the requests per second one ingest key can sustain.
 	IngestKeyRate int
 }
@@ -34,6 +37,9 @@ func Load() (Config, error) {
 		c.ViteURL = env("BEACON_VITE_URL", "http://localhost:8367")
 	}
 	var err error
+	if c.IngestIPRate, err = positiveInt("BEACON_INGEST_IP_RATE", 1); err != nil {
+		return Config{}, err
+	}
 	if c.IngestKeyRate, err = positiveInt("BEACON_INGEST_KEY_RATE", 50); err != nil {
 		return Config{}, err
 	}
