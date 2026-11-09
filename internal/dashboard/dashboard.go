@@ -20,7 +20,12 @@ import (
 	"github.com/riadafridishibly/beacon/internal/web"
 )
 
-const maxNameLen = 100
+const (
+	maxNameLen = 100
+	// requestTimeout is under the server's 30s WriteTimeout, so a slow page
+	// gets the timeout page instead of a dropped connection.
+	requestTimeout = 20 * time.Second
+)
 
 // Config is how New builds the dashboard.
 type Config struct {
@@ -28,6 +33,8 @@ type Config struct {
 	ViteURL string
 	// Now is the current time; nil means time.Now.
 	Now func() time.Time
+	// RequestTimeout limits each request; zero means 20 seconds.
+	RequestTimeout time.Duration
 }
 
 // New returns the dashboard handler, with the login page, session checks,
@@ -62,7 +69,13 @@ func New(pool *pgxpool.Pool, cfg Config) (http.Handler, error) {
 	a.Routes(mux)
 	mux.Handle("/", a.RequireLogin(pages))
 
+	timeout := cfg.RequestTimeout
+	if timeout == 0 {
+		timeout = requestTimeout
+	}
+
 	var h http.Handler = mux
+	h = web.Timeout(timeout)(h)
 	h = assets.Middleware(h)
 	h = http.NewCrossOriginProtection().Handler(h)
 	h = web.SecureHeaders(cfg.ViteURL)(h)
@@ -153,7 +166,9 @@ func (d *dashboard) createApp(w http.ResponseWriter, r *http.Request) error {
 		return web.Render(w, r, http.StatusUnprocessableEntity, newAppPage(auth.Nav(r.Context()), f))
 	}
 	// The key is shown in this response and nowhere else, so the page is
-	// rendered here rather than after a redirect, and kept out of caches.
+	// rendered here rather than after a redirect, kept out of caches, and
+	// rendered even if the app was committed just before the deadline.
 	w.Header().Set("Cache-Control", "no-store")
+	r = r.WithContext(context.WithoutCancel(r.Context()))
 	return web.Render(w, r, http.StatusCreated, appCreatedPage(auth.Nav(r.Context()), f.ID, key))
 }

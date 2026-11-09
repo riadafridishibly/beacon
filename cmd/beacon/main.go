@@ -96,7 +96,12 @@ func serve(ctx context.Context, cfg config.Config) error {
 		slog.Warn("BEACON_TRUSTED_PROXIES is not set; behind a reverse proxy, all clients share one rate limit and get no country or city")
 	}
 
-	dash, err := dashboard.New(pool, dashboard.Config{ViteURL: cfg.ViteURL})
+	dashPool, err := db.ConnectDashboard(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	defer dashPool.Close()
+	dash, err := dashboard.New(dashPool, dashboard.Config{ViteURL: cfg.ViteURL})
 	if err != nil {
 		return err
 	}
