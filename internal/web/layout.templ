@@ -32,9 +32,9 @@ templ Layout(title string, nav *Nav) {
 	@Document(title) {
 		<header class="border-b border-base-300 bg-base-100">
 			<nav class="navbar mx-auto max-w-6xl gap-4 px-4">
-				<a href="/" class="flex flex-1 items-center gap-2 text-lg font-semibold tracking-tight">
-					<img src={ brandLogoPath } alt="" width="24" height="24" class="size-6"/>
-					{ BrandName(ctx) }
+				<a href="/" class="flex min-w-0 flex-1 items-center gap-2 text-lg font-semibold tracking-tight">
+					<img src={ brandLogoPath } alt="" width="24" height="24" class="size-6 shrink-0"/>
+					<span class="truncate">{ BrandName(ctx) }</span>
 				</a>
 				if nav != nil {
 					<span class="text-sm opacity-70 max-sm:hidden">{ nav.Email }</span>
