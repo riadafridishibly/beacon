@@ -45,12 +45,14 @@ fmt: ## Format Go, templ and TypeScript
 	go tool templ fmt .
 	$(GOLANGCI_LINT) fmt
 	cd client/go && $(GOLANGCI_LINT) fmt
+	cd client/rust && cargo fmt
 	pnpm run fix
 
 test: ## Go tests (need PostgreSQL, see BEACON_TEST_DATABASE_URL)
 	go test ./...
 	cd client/go && go test -race ./...
 	pnpm run test:client
+	cd client/rust && cargo test
 
 check: gen ## Everything that must pass before work is done
 	go tool templ fmt -fail .
@@ -58,6 +60,7 @@ check: gen ## Everything that must pass before work is done
 	$(GOLANGCI_LINT) run
 	go test ./...
 	cd client/go && go vet ./... && $(GOLANGCI_LINT) run && go test -race ./...
+	cd client/rust && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
 	pnpm run check
 	pnpm run test:client
 	pnpm run build:client

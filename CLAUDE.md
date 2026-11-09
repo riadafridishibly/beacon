@@ -26,6 +26,7 @@ cmd/beacon/          serve, migrate, app create|key|list|revoke, user create|res
 cmd/seed/            generated demo data for development
 client/go/           Go client, its own module, standard library only
 client/ts/           TypeScript client, no runtime dependencies; storage and gzip are pluggable
+client/rust/         Rust client, the app supplies the HTTP transport
 client/conformance/  cases every client and the server must pass
 frontend/src/        main.ts (htmx setup), app.css (Tailwind + daisyUI theme)
 internal/config/     BEACON_* environment
