@@ -17,9 +17,31 @@ import (
 //go:embed migrations/*.sql
 var MigrationsFS embed.FS
 
+// dashboardMaxConns is small so that slow dashboard queries leave Postgres
+// capacity for ingest.
+const dashboardMaxConns = 3
+
 // Connect opens a pool and checks that the database answers.
 func Connect(ctx context.Context, url string) (*pgxpool.Pool, error) {
-	pool, err := pgxpool.New(ctx, url)
+	cfg, err := pgxpool.ParseConfig(url)
+	if err != nil {
+		return nil, err
+	}
+	return open(ctx, cfg)
+}
+
+// ConnectDashboard opens the dashboard's own pool, separate from ingest's.
+func ConnectDashboard(ctx context.Context, url string) (*pgxpool.Pool, error) {
+	cfg, err := pgxpool.ParseConfig(url)
+	if err != nil {
+		return nil, err
+	}
+	cfg.MaxConns = min(cfg.MaxConns, dashboardMaxConns)
+	return open(ctx, cfg)
+}
+
+func open(ctx context.Context, cfg *pgxpool.Config) (*pgxpool.Pool, error) {
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}

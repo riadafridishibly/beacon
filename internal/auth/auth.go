@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -28,10 +29,17 @@ const (
 	CookieName = "__Host-session"
 	sessionTTL = 30 * 24 * time.Hour
 	touchEvery = time.Minute
+	// maxLoginBody leaves room for a long next URL.
+	maxLoginBody = 16 << 10
+	// maxHashing caps the memory that password checks use at once, at
+	// argonMemory each.
+	maxHashing = 4
 
 	LoginPath  = "/login"
 	LogoutPath = "/logout"
 )
+
+const badLogin = "Email or password is incorrect."
 
 var (
 	ErrEmailTaken = errors.New("an account with that email already exists")
@@ -71,6 +79,7 @@ type Auth struct {
 	byIP      *web.Limiter
 	byIPEmail *web.Limiter
 	byEmail   *web.Limiter
+	hashing   chan struct{}
 }
 
 // New returns an Auth that keeps sessions through q.
@@ -80,6 +89,7 @@ func New(q *db.Queries) *Auth {
 		byIP:      web.NewLimiter(10*time.Second, 30),
 		byIPEmail: web.NewLimiter(time.Minute, 5),
 		byEmail:   web.NewLimiter(10*time.Second, 50),
+		hashing:   make(chan struct{}, maxHashing),
 	}
 }
 
@@ -153,8 +163,16 @@ func (a *Auth) loginForm(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (a *Auth) login(w http.ResponseWriter, r *http.Request) error {
+	r.Body = http.MaxBytesReader(w, r.Body, maxLoginBody)
 	v := loginView{Email: normalizeEmail(r.PostFormValue("email")), Next: safeNext(r.PostFormValue("next"))}
 	password := r.PostFormValue("password")
+
+	// No account has an invalid email. Checking first keeps the limiter
+	// keys short and text PostgreSQL can't accept out of the query.
+	if !validEmail(v.Email) {
+		v.Error = badLogin
+		return web.Render(w, r, http.StatusUnprocessableEntity, loginPage(v))
+	}
 
 	ip := web.ClientKey(r)
 	if !a.byIP.Allow(ip) || !a.byIPEmail.Allow(ip+" "+v.Email) || !a.byEmail.Allow(v.Email) {
@@ -162,19 +180,15 @@ func (a *Auth) login(w http.ResponseWriter, r *http.Request) error {
 		return web.Render(w, r, http.StatusTooManyRequests, loginPage(v))
 	}
 	row, err := a.q.GetLogin(r.Context(), v.Email)
-	ok := false
-	switch {
-	case errors.Is(err, pgx.ErrNoRows):
-		spendHashTime(password)
-	case err != nil:
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return err
-	default:
-		if ok, err = CheckPassword(row.PasswordHash, password); err != nil {
-			return err
-		}
+	}
+	ok, err := a.verify(r.Context(), row.PasswordHash, password)
+	if err != nil {
+		return err
 	}
 	if !ok {
-		v.Error = "Email or password is incorrect."
+		v.Error = badLogin
 		return web.Render(w, r, http.StatusUnprocessableEntity, loginPage(v))
 	}
 	if err := a.q.DeleteExpiredSessions(r.Context(), row.ID); err != nil {
@@ -192,6 +206,23 @@ func (a *Auth) login(w http.ResponseWriter, r *http.Request) error {
 	setCookie(w, token)
 	http.Redirect(w, r, v.Next, http.StatusSeeOther)
 	return nil
+}
+
+// verify checks password against hash while holding one of the hashing
+// slots. An empty hash, for an unknown email, never matches but takes as
+// long.
+func (a *Auth) verify(ctx context.Context, hash, password string) (bool, error) {
+	select {
+	case a.hashing <- struct{}{}:
+		defer func() { <-a.hashing }()
+	case <-ctx.Done():
+		return false, ctx.Err()
+	}
+	if hash == "" {
+		spendHashTime(password)
+		return false, nil
+	}
+	return CheckPassword(hash, password)
 }
 
 func (a *Auth) logout(w http.ResponseWriter, r *http.Request) error {
@@ -276,8 +307,14 @@ func validEmail(s string) bool {
 
 // safeNext keeps post-login redirects on this site.
 func safeNext(next string) string {
-	if strings.HasPrefix(next, "/") && !strings.HasPrefix(next, "//") && !strings.ContainsAny(next, "\\\r\n") {
+	if strings.HasPrefix(next, "/") && !strings.HasPrefix(next, "//") && !strings.ContainsFunc(next, unsafeInRedirect) {
 		return next
 	}
 	return "/"
+}
+
+// unsafeInRedirect matches what browsers rewrite in a Location header. They
+// treat \ as / and strip tabs and newlines, so "/\t/x" becomes "//x".
+func unsafeInRedirect(r rune) bool {
+	return r == '\\' || unicode.IsControl(r)
 }

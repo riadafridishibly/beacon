@@ -20,7 +20,12 @@ import (
 	"github.com/riadafridishibly/beacon/internal/web"
 )
 
-const maxNameLen = 100
+const (
+	maxNameLen = 100
+	// requestTimeout is under the server's 30s WriteTimeout, so a slow page
+	// gets the timeout page instead of a dropped connection.
+	requestTimeout = 20 * time.Second
+)
 
 // Config is how New builds the dashboard.
 type Config struct {
@@ -28,6 +33,8 @@ type Config struct {
 	ViteURL string
 	// Now is the current time; nil means time.Now.
 	Now func() time.Time
+	// RequestTimeout limits each request; zero means 20 seconds.
+	RequestTimeout time.Duration
 }
 
 // New returns the dashboard handler, with the login page, session checks,
@@ -62,7 +69,13 @@ func New(pool *pgxpool.Pool, cfg Config) (http.Handler, error) {
 	a.Routes(mux)
 	mux.Handle("/", a.RequireLogin(pages))
 
+	timeout := cfg.RequestTimeout
+	if timeout == 0 {
+		timeout = requestTimeout
+	}
+
 	var h http.Handler = mux
+	h = web.Timeout(timeout)(h)
 	h = assets.Middleware(h)
 	h = http.NewCrossOriginProtection().Handler(h)
 	h = web.SecureHeaders(cfg.ViteURL)(h)

@@ -40,6 +40,22 @@ func setup(t *testing.T) (*pgxpool.Pool, *client, string) {
 	return pool, &client{t: t, h: h}, pw
 }
 
+func TestSlowRequestGetsTimeoutPage(t *testing.T) {
+	t.Parallel()
+	pool, c, pw := setup(t)
+	c.login(pw)
+
+	slow, err := New(pool, Config{ViteURL: "http://localhost:8367", RequestTimeout: time.Nanosecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.h = slow
+	w := c.do(http.MethodGet, "/", nil)
+	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "took too long") {
+		t.Errorf("status %d, body %.200s", w.Code, w.Body.String())
+	}
+}
+
 func (c *client) do(method, path string, form url.Values) *httptest.ResponseRecorder {
 	c.t.Helper()
 	var r *http.Request

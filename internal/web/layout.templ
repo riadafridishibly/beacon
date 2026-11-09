@@ -67,6 +67,14 @@ templ NotFoundPage() {
 	}
 }
 
+// TimeoutPage is shown when a request runs out of time.
+templ TimeoutPage() {
+	@Layout("Timed out", nil) {
+		@PageHeader("This page took too long")
+		<p class="opacity-70">Try a shorter time range, or go back to the <a href="/" class={ LinkClass }>apps</a>.</p>
+	}
+}
+
 // ErrorPage is the 500 page.
 templ ErrorPage() {
 	@Layout("Error", nil) {
