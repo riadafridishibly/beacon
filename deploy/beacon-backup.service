@@ -1,0 +1,7 @@
+[Unit]
+Description=Dump the beacon database
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/beacon/.env
+ExecStart=%h/beacon/scripts/backup.sh

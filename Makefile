@@ -9,7 +9,7 @@ PG_ADMIN_URL        ?= postgres://localhost:5432/postgres?sslmode=disable
 BEACON_DATABASE_URL ?= postgres://localhost:5432/beacon?sslmode=disable
 export BEACON_DATABASE_URL
 
-.PHONY: help setup db-setup db-up dev dev-vite dev-go seed gen fmt check test build frontend build-linux clean
+.PHONY: help setup db-setup db-up dev dev-vite dev-go seed gen fmt check test build frontend build-linux deploy clean
 
 help: ## List targets
 	@grep -E '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
@@ -71,6 +71,9 @@ build: gen frontend ## bin/beacon for this machine
 
 build-linux: gen frontend ## bin/linux-amd64/beacon, static
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o bin/linux-amd64/beacon ./cmd/beacon
+
+deploy: build-linux ## Ship to DEPLOY_HOST (user@server) and restart
+	deploy/deploy.sh "$(DEPLOY_HOST)"
 
 clean: ## Remove build output
 	rm -rf bin

@@ -25,8 +25,9 @@ type Nav struct {
 	LogoutPath string
 }
 
-// Layout is the page frame: a header, the htmx error banner and the main
-// column.
+// Layout is the page frame: a header, the htmx error banner, the main column
+// and a footer. The footer link is the attribution DB-IP's licence requires
+// on pages that show its data.
 templ Layout(title string, nav *Nav) {
 	@Document(title) {
 		<header class="border-b border-base-300 bg-base-100">
@@ -46,6 +47,9 @@ templ Layout(title string, nav *Nav) {
 		<main class="mx-auto max-w-6xl px-4 py-8">
 			{ children... }
 		</main>
+		<footer class="mx-auto max-w-6xl px-4 pb-8 text-xs opacity-60">
+			<a href="https://db-ip.com" class="link link-hover">IP Geolocation by DB-IP</a>
+		</footer>
 	}
 }
 
