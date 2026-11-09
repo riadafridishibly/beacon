@@ -84,7 +84,7 @@ type Config struct {
 }
 
 // AllowProp permits a props key. Keys that were not allowed are dropped
-// from events passed to Track and TrackValue.
+// from events passed to Track, TrackValue and TrackError.
 func (c *Config) AllowProp(key string) {
 	if c.allowed == nil {
 		c.allowed = make(map[string]bool)
@@ -201,9 +201,21 @@ func (c *Client) SetUserID(id string) {
 	c.userID = id
 }
 
-// Track queues an event. propsJSON is a JSON object, or "" for none.
+// Track queues an event. propsJSON is a JSON object, or "" for none. Report
+// errors with TrackError: the dashboard counts only names starting "error.".
 func (c *Client) Track(name, propsJSON string) error {
 	return c.track(name, nil, propsJSON)
+}
+
+// TrackError queues the event error.<area>, which the dashboard counts as an
+// error. message is sent as the "message" prop only if AllowProp permits it,
+// and "" sends none. propsJSON is a JSON object of other props, or "".
+func (c *Client) TrackError(area, message, propsJSON string) error {
+	props, err := withMessage(propsJSON, message)
+	if err != nil {
+		return err
+	}
+	return c.track("error."+area, nil, props)
 }
 
 // TrackValue queues an event with its one numeric measure, such as a

@@ -356,6 +356,49 @@ func TestPropsMustBeAllowed(t *testing.T) {
 	}
 }
 
+func TestTrackError(t *testing.T) {
+	t.Parallel()
+	srv := newServer(t)
+	cfg := srv.config(t)
+	cfg.AllowProp("code")
+	cfg.AllowProp("message")
+	c := newClient(t, cfg)
+	must(t, c.TrackError("engine", "boom", `{"code":42,"message":"old","other":1}`))
+	must(t, c.TrackError("sync", "", ""))
+	must(t, c.TrackError("auth", "denied", "null"))
+	for _, bad := range [][3]string{{"", "m", ""}, {"Bad Area", "m", ""}, {"x", "m", "[1]"}, {"x", "", "[1]"}} {
+		if err := c.TrackError(bad[0], bad[1], bad[2]); err == nil {
+			t.Errorf("TrackError%q accepted", bad)
+		}
+	}
+	must(t, c.Close())
+
+	events := decodeEvents(t, srv.wait(t, 1))
+	if len(events) != 3 {
+		t.Fatalf("events %+v", events)
+	}
+	if e := events[0]; e.Name != "error.engine" || string(e.Props) != `{"code":42,"message":"boom"}` {
+		t.Errorf("event %s %s", e.Name, e.Props)
+	}
+	if e := events[1]; e.Name != "error.sync" || e.Props != nil {
+		t.Errorf("event %s %s", e.Name, e.Props)
+	}
+	if e := events[2]; e.Name != "error.auth" || string(e.Props) != `{"message":"denied"}` {
+		t.Errorf("event %s %s", e.Name, e.Props)
+	}
+}
+
+func TestTrackErrorMessageMustBeAllowed(t *testing.T) {
+	t.Parallel()
+	srv := newServer(t)
+	c := newClient(t, srv.config(t))
+	must(t, c.TrackError("engine", "secret", ""))
+	must(t, c.Close())
+	if e := decodeEvents(t, srv.wait(t, 1))[0]; e.Name != "error.engine" || e.Props != nil {
+		t.Errorf("event %s %s", e.Name, e.Props)
+	}
+}
+
 func TestAllowPropAfterNewClientHasNoEffect(t *testing.T) {
 	t.Parallel()
 	srv := newServer(t)

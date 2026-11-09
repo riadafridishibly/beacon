@@ -174,6 +174,40 @@ test("props must be allowed", async (t) => {
   assert.ok(logs.some((m) => m.includes("message")));
 });
 
+test("trackError names the event and sets message", async (t) => {
+  const srv = await startServer(t);
+  const c = await createClient({
+    ...(await srv.options(t)),
+    allowProps: ["code", "message"],
+  });
+  c.trackError("engine", "boom", { code: 42, message: "old", other: 1 });
+  c.trackError("sync", "");
+  c.trackError("auth", "denied", null as never);
+  assert.throws(() => c.trackError("", "m"), BeaconError);
+  assert.throws(() => c.trackError("Bad Area", "m"), BeaconError);
+  assert.throws(() => c.trackError("x", "m", [1] as never), BeaconError);
+  assert.throws(() => c.trackError("x", "", [1] as never), BeaconError);
+  await c.close();
+  const events = decode(await srv.wait(1));
+  assert.equal(events.length, 3);
+  assert.equal(events[0]?.name, "error.engine");
+  assert.deepEqual(events[0]?.props, { code: 42, message: "boom" });
+  assert.equal(events[1]?.name, "error.sync");
+  assert.equal(events[1]?.props, undefined);
+  assert.equal(events[2]?.name, "error.auth");
+  assert.deepEqual(events[2]?.props, { message: "denied" });
+});
+
+test("trackError drops a message that is not allowed", async (t) => {
+  const srv = await startServer(t);
+  const c = await createClient(await srv.options(t));
+  c.trackError("engine", "secret");
+  await c.close();
+  const events = decode(await srv.wait(1));
+  assert.equal(events[0]?.name, "error.engine");
+  assert.equal(events[0]?.props, undefined);
+});
+
 test("user id is opt in", async (t) => {
   const srv = await startServer(t);
   const c = await createClient(await srv.options(t));

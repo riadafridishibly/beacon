@@ -128,6 +128,30 @@ func marshal(v any) ([]byte, error) {
 	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
 }
 
+// withMessage returns propsJSON with its message key set, or unchanged when
+// message is empty.
+func withMessage(propsJSON, message string) (string, error) {
+	if message == "" {
+		return propsJSON, nil
+	}
+	var props map[string]json.RawMessage
+	if propsJSON != "" {
+		if err := json.Unmarshal([]byte(propsJSON), &props); err != nil {
+			return "", errors.New("beacon: props must be a JSON object")
+		}
+	}
+	if props == nil {
+		props = make(map[string]json.RawMessage, 1)
+	}
+	m, err := marshal(message)
+	if err != nil {
+		return "", err
+	}
+	props["message"] = m
+	b, err := marshal(props)
+	return string(b), err
+}
+
 // filterProps keeps the allowed keys of a JSON object and returns the names
 // of the others.
 func filterProps(propsJSON string, allowed map[string]bool) (json.RawMessage, []string, error) {

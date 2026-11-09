@@ -117,6 +117,16 @@ function over(s: string | undefined, limit: number): boolean {
   return s !== undefined && byteLength(s) > limit;
 }
 
+/**
+ * withMessage returns props with its message key set, or unchanged when message
+ * is empty. Props that filterProps refuses are returned as they are for it to report.
+ */
+export function withMessage(props: unknown, message: string): unknown {
+  const isObject = typeof props === "object" && !Array.isArray(props);
+  if (message === "" || !(isObject || props === undefined)) return props;
+  return { ...(props as Props | null | undefined), message };
+}
+
 /** filterProps keeps the allowed keys of an object and returns the names of the others. */
 export function filterProps(
   props: unknown,
