@@ -10,14 +10,17 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/netip"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/riadafridishibly/beacon/internal/db"
 	"github.com/riadafridishibly/beacon/internal/geo"
+	"github.com/riadafridishibly/beacon/internal/web"
 )
 
 const (
@@ -68,14 +71,22 @@ type Apps interface {
 	App(ctx context.Context, key string) (string, error)
 }
 
+// Handler serves POST /v1/events. ByIP and ByKey are required.
 type Handler struct {
-	Apps Apps
-	DB   *db.Queries
-	Geo  *geo.Locator
-	Now  func() time.Time
+	Apps  Apps
+	DB    *db.Queries
+	Geo   *geo.Locator
+	ByIP  *web.Limiter
+	ByKey *web.Limiter
+	Now   func() time.Time
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Before the key lookup, so guessing keys can't load the database, and
+	// so one address with a leaked key can't drain the key's bucket.
+	if !allow(w, h.ByIP, web.ClientKey(r)) {
+		return
+	}
 	key, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	if !ok || key == "" {
 		writeError(w, http.StatusUnauthorized, "missing ingest key", -1)
@@ -89,6 +100,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if appID == "" {
 		writeError(w, http.StatusUnauthorized, "unknown ingest key", -1)
+		return
+	}
+	if !allow(w, h.ByKey, key) {
 		return
 	}
 
@@ -126,6 +140,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	_ = json.NewEncoder(w).Encode(map[string]int{"accepted": len(rows)})
+}
+
+// allow writes a 429 and returns false when l refuses key.
+func allow(w http.ResponseWriter, l *web.Limiter, key string) bool {
+	ok, wait := l.Take(key)
+	if !ok {
+		w.Header().Set("Retry-After", strconv.Itoa(max(1, int(math.Ceil(wait.Seconds())))))
+		writeError(w, http.StatusTooManyRequests, "rate limit exceeded", -1)
+	}
+	return ok
 }
 
 func (h *Handler) now() time.Time {

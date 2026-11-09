@@ -22,7 +22,7 @@ the repo. Don't add docs files.
 ## Layout
 
 ```
-cmd/beacon/          serve, migrate, app create|key|list, user create|reset
+cmd/beacon/          serve, migrate, app create|key|list|revoke, user create|reset
 cmd/seed/            generated demo data for development
 frontend/src/        main.ts (htmx setup), app.css (Tailwind + daisyUI theme)
 internal/config/     BEACON_* environment

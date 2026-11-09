@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/riadafridishibly/beacon/internal/apps"
 	"github.com/riadafridishibly/beacon/internal/db"
 	"github.com/riadafridishibly/beacon/internal/testdb"
+	"github.com/riadafridishibly/beacon/internal/web"
 )
 
 var now = time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)
@@ -28,7 +30,10 @@ func setup(t *testing.T) (*pgxpool.Pool, http.Handler, string) {
 		t.Fatal(err)
 	}
 	q := db.New(pool)
-	h := &Handler{Apps: apps.NewResolver(q), DB: q, Now: func() time.Time { return now }}
+	h := &Handler{
+		Apps: apps.NewResolver(q), DB: q, Now: func() time.Time { return now },
+		ByIP: web.NewLimiter(time.Nanosecond, 1000), ByKey: web.NewLimiter(time.Nanosecond, 1000),
+	}
 	return pool, h, key
 }
 
@@ -171,5 +176,72 @@ func TestIngestBodyLimit(t *testing.T) {
 		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "too large") {
 			t.Errorf("gzip=%v: %d %s", gz, rec.Code, rec.Body)
 		}
+	}
+}
+
+const oneEvent = `{"context": {"device_id": "d1"}, "events": [{"name": "app.open"}]}`
+
+func postFrom(h http.Handler, addr, key string) *httptest.ResponseRecorder {
+	r := httptest.NewRequest(http.MethodPost, "/v1/events", strings.NewReader(oneEvent))
+	r.RemoteAddr = addr
+	r.Header.Set("Authorization", "Bearer "+key)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	return rec
+}
+
+func assertLimited(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429: %s", rec.Code, rec.Body)
+	}
+	secs, err := strconv.Atoi(rec.Header().Get("Retry-After"))
+	if err != nil || secs < 3500 || secs > 3600 {
+		t.Errorf("Retry-After = %q, want about an hour", rec.Header().Get("Retry-After"))
+	}
+	if !strings.Contains(rec.Body.String(), "rate limit") {
+		t.Errorf("body = %s", rec.Body)
+	}
+}
+
+func TestRateLimitByIP(t *testing.T) {
+	t.Parallel()
+	pool, base, key := setup(t)
+	h := *base.(*Handler)
+	h.ByIP = web.NewLimiter(time.Hour, 1)
+
+	if rec := postFrom(&h, "198.51.100.1:1", key); rec.Code != http.StatusAccepted {
+		t.Fatalf("first: %d %s", rec.Code, rec.Body)
+	}
+	assertLimited(t, postFrom(&h, "198.51.100.1:2", key))
+	assertLimited(t, postFrom(&h, "198.51.100.1:3", "bk_unknown"))
+	if rec := postFrom(&h, "198.51.100.2:1", key); rec.Code != http.StatusAccepted {
+		t.Fatalf("other address: %d %s", rec.Code, rec.Body)
+	}
+	if got := load(t, pool); len(got) != 2 {
+		t.Errorf("stored %d events, want 2", len(got))
+	}
+}
+
+func TestRateLimitByKey(t *testing.T) {
+	t.Parallel()
+	pool, base, key := setup(t)
+	h := *base.(*Handler)
+	h.ByKey = web.NewLimiter(time.Hour, 1)
+	second, err := apps.NewKey(context.Background(), db.New(pool), "demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Unknown keys get no bucket, so they can't fill the limiter's table.
+	if rec := postFrom(&h, "198.51.100.1:1", "bk_unknown"); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unknown key: %d %s", rec.Code, rec.Body)
+	}
+	if rec := postFrom(&h, "198.51.100.1:1", key); rec.Code != http.StatusAccepted {
+		t.Fatalf("first: %d %s", rec.Code, rec.Body)
+	}
+	assertLimited(t, postFrom(&h, "198.51.100.2:1", key))
+	if rec := postFrom(&h, "198.51.100.1:1", second); rec.Code != http.StatusAccepted {
+		t.Fatalf("other key: %d %s", rec.Code, rec.Body)
 	}
 }

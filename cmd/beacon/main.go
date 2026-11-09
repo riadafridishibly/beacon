@@ -28,7 +28,8 @@ const usage = `usage:
   beacon migrate                 apply database migrations
   beacon app create <id> [name]  add an app and print its ingest key
   beacon app key <id>            print a new ingest key for an app
-  beacon app list                list apps
+  beacon app list                list apps and their ingest keys
+  beacon app revoke <key prefix> stop accepting an ingest key
   beacon user create <email>     add a dashboard account and print its password
   beacon user reset <email>      print a new password and sign the account out`
 
@@ -91,6 +92,10 @@ func serve(ctx context.Context, cfg config.Config) error {
 		slog.Warn("BEACON_GEOIP_DB is not set; events get no country or city")
 	}
 
+	if len(cfg.TrustedProxies) == 0 {
+		slog.Warn("BEACON_TRUSTED_PROXIES is not set; behind a reverse proxy, all clients share one rate limit and get no country or city")
+	}
+
 	dash, err := dashboard.New(pool, dashboard.Config{ViteURL: cfg.ViteURL})
 	if err != nil {
 		return err
@@ -99,7 +104,17 @@ func serve(ctx context.Context, cfg config.Config) error {
 	q := db.New(pool)
 	mux := http.NewServeMux()
 	mux.Handle("/", dash)
-	mux.Handle("POST /v1/events", &ingest.Handler{Apps: apps.NewResolver(q), DB: q, Geo: loc})
+	mux.Handle("POST /v1/events", &ingest.Handler{
+		Apps: apps.NewResolver(q),
+		DB:   q,
+		Geo:  loc,
+		// The default of one request a second covers about 30 devices
+		// behind one NAT, at the two batches a minute a client sends.
+		ByIP: web.NewLimiter(time.Second/time.Duration(cfg.IngestIPRate), 60*cfg.IngestIPRate),
+		// Every install of an app shares its key, so this limit grows with
+		// the number of installs.
+		ByKey: web.NewLimiter(time.Second/time.Duration(cfg.IngestKeyRate), 10*cfg.IngestKeyRate),
+	})
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		if err := pool.Ping(r.Context()); err != nil {
 			http.Error(w, "database unavailable", http.StatusServiceUnavailable)
@@ -174,7 +189,25 @@ func appCmd(ctx context.Context, cfg config.Config, args []string) error {
 		}
 		for _, a := range list {
 			fmt.Printf("%s\t%s\n", a.ID, a.Name)
+			keys, err := q.ListAppKeys(ctx, a.ID)
+			if err != nil {
+				return err
+			}
+			for _, k := range keys {
+				status := "active"
+				if k.RevokedAt != nil {
+					status = "revoked " + k.RevokedAt.UTC().Format(time.DateTime) + " UTC"
+				}
+				fmt.Printf("  %s\t%s\n", k.Prefix, status)
+			}
 		}
+		return nil
+	case args[0] == "revoke" && len(args) == 2:
+		appID, err := apps.Revoke(ctx, q, args[1])
+		if err != nil {
+			return err
+		}
+		fmt.Printf("revoked %s of app %s; a running server can accept it for up to a minute\n", args[1], appID)
 		return nil
 	}
 	return errors.New(usage)

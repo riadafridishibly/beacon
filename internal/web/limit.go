@@ -10,8 +10,9 @@ import (
 )
 
 const (
-	sweepEvery = time.Minute
-	maxBuckets = 100_000
+	sweepEvery     = time.Minute
+	fullSweepEvery = time.Second
+	maxBuckets     = 100_000
 )
 
 // Limiter is a token bucket per key, held in memory. Each process has its
@@ -33,10 +34,23 @@ func NewLimiter(every time.Duration, burst int) *Limiter {
 
 // Allow reports whether key may make a request now, and counts it.
 func (l *Limiter) Allow(key string) bool {
+	ok, _ := l.Take(key)
+	return ok
+}
+
+// Take is Allow that also returns, for a refused request, how long until
+// key can make another.
+func (l *Limiter) Take(key string) (bool, time.Duration) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := time.Now()
-	if now.Sub(l.lastSweep) > sweepEvery {
+	// A full table refuses new keys, so a flood of them must not hold it
+	// full until the next regular sweep.
+	interval := sweepEvery
+	if len(l.buckets) >= l.max {
+		interval = fullSweepEvery
+	}
+	if now.Sub(l.lastSweep) > interval {
 		l.sweep(now)
 	}
 	b, ok := l.buckets[key]
@@ -44,12 +58,15 @@ func (l *Limiter) Allow(key string) bool {
 		// Memory stays bounded under a flood of new keys; keys already
 		// tracked keep their own limits.
 		if len(l.buckets) >= l.max {
-			return false
+			return false, fullSweepEvery
 		}
 		b = rate.NewLimiter(rate.Every(l.every), l.burst)
 		l.buckets[key] = b
 	}
-	return b.AllowN(now, 1)
+	if b.AllowN(now, 1) {
+		return true, 0
+	}
+	return false, time.Duration((1 - b.TokensAt(now)) * float64(l.every))
 }
 
 // sweep forgets buckets that have refilled, which behave like new ones.

@@ -1,5 +1,6 @@
 // Package dashboard serves the web UI: sign-in, the app list, creating apps,
-// and each app's overview, events, users, devices and event catalog.
+// and each app's overview, events, users, devices, event catalog and ingest
+// keys.
 package dashboard
 
 import (
@@ -51,7 +52,9 @@ func New(pool *pgxpool.Pool, cfg Config) (http.Handler, error) {
 	pages.Handle("GET /apps/{id}/user", web.Handle(d.subjectDetail(userSubject)))
 	pages.Handle("GET /apps/{id}/catalog", web.Handle(d.catalog))
 	pages.Handle("GET /apps/{id}/catalog/{name}", web.Handle(d.catalogEvent))
+	pages.Handle("GET /apps/{id}/keys", web.Handle(d.keys))
 	pages.Handle("POST /apps", web.Handle(d.createApp))
+	pages.Handle("POST /keys/{prefix}/revoke", web.Handle(d.revokeKey))
 	pages.Handle("/", web.Handle(func(http.ResponseWriter, *http.Request) error { return web.ErrNotFound }))
 
 	mux := http.NewServeMux()
@@ -102,6 +105,30 @@ func (d *dashboard) appList(w http.ResponseWriter, r *http.Request) error {
 
 func (d *dashboard) newApp(w http.ResponseWriter, r *http.Request) error {
 	return web.Render(w, r, http.StatusOK, newAppPage(auth.Nav(r.Context()), newAppForm{}))
+}
+
+func (d *dashboard) keys(w http.ResponseWriter, r *http.Request) error {
+	app, err := d.app(r.Context(), r.PathValue("id"))
+	if err != nil {
+		return err
+	}
+	keys, err := d.q.ListAppKeys(r.Context(), app.ID)
+	if err != nil {
+		return err
+	}
+	return web.Render(w, r, http.StatusOK, keysPage(auth.Nav(r.Context()), app, keys, d.now()))
+}
+
+func (d *dashboard) revokeKey(w http.ResponseWriter, r *http.Request) error {
+	appID, err := apps.Revoke(r.Context(), d.q, r.PathValue("prefix"))
+	if errors.Is(err, apps.ErrKeyNotFound) {
+		return web.ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	web.Redirect(w, r, "/apps/"+appID+"/keys")
+	return nil
 }
 
 func (d *dashboard) createApp(w http.ResponseWriter, r *http.Request) error {

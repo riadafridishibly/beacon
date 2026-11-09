@@ -1,0 +1,37 @@
+package dashboard
+
+import (
+	"time"
+
+	"github.com/riadafridishibly/beacon/internal/db"
+	"github.com/riadafridishibly/beacon/internal/web"
+)
+
+templ keysPage(nav *web.Nav, app db.App, keys []db.ListAppKeysRow, now time.Time) {
+	@web.Layout("Keys · "+app.Name, nav) {
+		@appHeader(app, "keys")
+		<ul class={ web.CardClass, "divide-y divide-base-300" }>
+			for _, k := range keys {
+				<li class="flex items-center justify-between gap-4 px-4 py-3">
+					<div class="min-w-0">
+						<p class={ "font-mono text-sm", templ.KV("line-through opacity-60", k.RevokedAt != nil) }>{ k.Prefix }</p>
+						<p class="text-xs opacity-60">Created <time title={ utcTime(k.CreatedAt) }>{ ago(k.CreatedAt, now) }</time></p>
+					</div>
+					if k.RevokedAt != nil {
+						<p class="text-sm whitespace-nowrap opacity-70">Revoked <time title={ utcTime(*k.RevokedAt) }>{ ago(*k.RevokedAt, now) }</time></p>
+					} else {
+						<form
+							method="post"
+							action={ templ.SafeURL("/keys/" + k.Prefix + "/revoke") }
+							hx-boost="true"
+							hx-confirm={ "Revoke " + k.Prefix + "? Apps using this key will stop sending events." }
+						>
+							<button type="submit" class="btn btn-sm btn-error btn-soft">Revoke</button>
+						</form>
+					}
+				</li>
+			}
+		</ul>
+		<p class="mt-2 text-xs opacity-60">A revoked key can keep working for up to a minute. <code class="font-mono">beacon app key { app.ID }</code> makes a new one.</p>
+	}
+}
