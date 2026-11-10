@@ -229,6 +229,20 @@ func (d *dashboard) loadPropValues(ctx context.Context, appID, name, rng, key st
 	return v, nil
 }
 
+// rowsHaveValue reports whether any shown label has events with a value.
+func (v propValuesView) rowsHaveValue() bool {
+	return slices.ContainsFunc(v.Rows, func(r db.EventTopValuesRow) bool { return r.WithValue > 0 })
+}
+
+// valueText shows a percentile, which can overflow to infinity because
+// ingest accepts any JSON number.
+func valueText(v float64) string {
+	if finite(v) == nil {
+		return "–"
+	}
+	return formatNumber(v)
+}
+
 // buildCharts lays the rows out over days, so a day without events still has
 // a slot on the axis.
 func (v *catalogEventView) buildCharts(days []time.Time, rows []db.EventDailyRow) {

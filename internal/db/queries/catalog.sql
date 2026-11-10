@@ -59,11 +59,32 @@ GROUP BY k.key
 ORDER BY count(*) DESC, k.key
 LIMIT @key_limit;
 
+-- Percentiles are computed only for the top labels, since a key can have a
+-- distinct value on every row.
 -- name: EventTopValues :many
-SELECT left(props ->> @key::text, 200)::text AS label, count(*) AS events
-FROM events
-WHERE app_id = @app_id AND name = @name AND ts >= @since AND ts < @until
-  AND props ->> @key::text IS NOT NULL
-GROUP BY label
-ORDER BY events DESC, label
-LIMIT 10;
+WITH top AS (
+    SELECT left(n.props ->> @key::text, 200)::text AS label, count(*) AS events
+    FROM events n
+    WHERE n.app_id = @app_id AND n.name = @name AND n.ts >= @since AND n.ts < @until
+      AND n.props ->> @key::text IS NOT NULL
+    GROUP BY 1
+    ORDER BY 2 DESC, 1
+    LIMIT 10
+), measured AS (
+    SELECT left(e.props ->> @key::text, 200)::text AS label,
+           count(*) AS with_value,
+           percentile_cont(ARRAY[0.5, 0.95]::double precision[]) WITHIN GROUP (ORDER BY e.value) AS p
+    FROM events e
+    WHERE e.app_id = @app_id AND e.name = @name AND e.ts >= @since AND e.ts < @until
+      AND e.value IS NOT NULL
+      AND left(e.props ->> @key::text, 200) IN (SELECT top.label FROM top)
+    GROUP BY 1
+)
+SELECT t.label,
+       t.events,
+       coalesce(m.with_value, 0)::bigint AS with_value,
+       coalesce(m.p[1], 0)::double precision AS p50,
+       coalesce(m.p[2], 0)::double precision AS p95
+FROM top t
+LEFT JOIN measured m ON m.label = t.label
+ORDER BY t.events DESC, t.label;
