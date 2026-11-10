@@ -103,8 +103,8 @@ templ catalogEventBody(v catalogEventView) {
 			@fact("Events", web.Count(v.Total.Events), "")
 			@fact("Last seen", ago(v.LastSeen, v.Now), utcTime(v.LastSeen))
 			if v.hasValues() {
-				@fact("Value p50", formatNumber(v.Total.P50), "")
-				@fact("Value p95", formatNumber(v.Total.P95), "")
+				@fact("Value p50", valueText(v.Total.P50), "")
+				@fact("Value p95", valueText(v.Total.P95), "")
 			}
 		</dl>
 		<div class="grid gap-4 lg:grid-cols-2">
@@ -138,7 +138,7 @@ templ keyChange(v propValuesView) {
 templ propValues(v propValuesView) {
 	<section class={ web.PaddedCardClass, "min-w-0" }>
 		<h2 class="font-semibold">Top props values</h2>
-		if v.hasValues() {
+		if v.rowsHaveValue() {
 			<p class="text-sm opacity-60">Count, with p50 and p95 of value</p>
 		}
 		if v.Key == "" {
@@ -169,7 +169,12 @@ templ propValues(v propValuesView) {
 								<span class="line-clamp-2 min-w-0 wrap-anywhere" title={ r.Label }>{ r.Label }</span>
 								<span class="flex shrink-0 items-baseline gap-3 tabular-nums">
 									if r.WithValue > 0 {
-										<span class="text-xs opacity-60">p50 { valueText(r.P50) } · p95 { valueText(r.P95) }</span>
+										<span class="text-xs opacity-60">
+											p50 { valueText(r.P50) } · p95 { valueText(r.P95) }
+											if r.WithValue < r.Events {
+												· { web.Count(r.WithValue) } with value
+											}
+										</span>
 									}
 									{ web.Count(r.Events) }
 								</span>

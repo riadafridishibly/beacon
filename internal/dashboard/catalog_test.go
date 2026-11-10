@@ -213,7 +213,7 @@ func TestLoadCatalogEvent(t *testing.T) {
 		{Label: "home", Events: 4, WithValue: 4, P50: 25, P95: 38.5},
 		{Label: "<b>settings</b>", Events: 1, WithValue: 1, P50: 100, P95: 100},
 	}
-	if !reflect.DeepEqual(v.Values.Rows, want) || v.Values.Top != 4 || !v.Values.hasValues() {
+	if !reflect.DeepEqual(v.Values.Rows, want) || v.Values.Top != 4 || !v.Values.rowsHaveValue() {
 		t.Errorf("values = %+v", v.Values)
 	}
 
@@ -249,7 +249,7 @@ func TestLoadCatalogEvent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rows := unvalued.Values.Rows; len(rows) != 1 || rows[0].WithValue != 0 || unvalued.Values.hasValues() {
+	if rows := unvalued.Values.Rows; len(rows) != 1 || rows[0].WithValue != 0 || unvalued.Values.rowsHaveValue() {
 		t.Errorf("values without a value = %+v", unvalued.Values)
 	}
 }
@@ -330,5 +330,52 @@ func TestValueText(t *testing.T) {
 		if got := valueText(v); got != want {
 			t.Errorf("valueText(%v) = %q, want %q", v, got, want)
 		}
+	}
+}
+
+func TestTopValuesPercentilesCoverTopLabels(t *testing.T) {
+	t.Parallel()
+	pool := testdb.New(t)
+	ctx := context.Background()
+	if _, err := apps.Create(ctx, pool, "alpha", "Alpha"); err != nil {
+		t.Fatal(err)
+	}
+	ev := func(server string, value *float64) db.InsertEventsParams {
+		return db.InsertEventsParams{
+			AppID: "alpha", Name: "vpn.connect", DeviceID: "d", Ts: now, Value: value,
+			Props: props(t, map[string]any{"server": server}),
+		}
+	}
+	rows := []db.InsertEventsParams{ev("fra", fp(100)), ev("fra", fp(300)), ev("fra", nil), ev("fra", nil), ev("ams", nil), ev("ams", nil), ev("ams", nil)}
+	for i := range 12 {
+		rows = append(rows, ev(fmt.Sprintf("s%02d", i), fp(1)))
+	}
+	if _, err := db.New(pool).InsertEvents(ctx, rows); err != nil {
+		t.Fatal(err)
+	}
+	d := &dashboard{pool: pool, q: db.New(pool), nowFunc: func() time.Time { return now }}
+
+	v, err := d.loadCatalogEvent(ctx, "alpha", "vpn.connect", "7d", "server", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(v.Values.Rows) != 10 {
+		t.Fatalf("rows = %d", len(v.Values.Rows))
+	}
+	want := []db.EventTopValuesRow{
+		{Label: "fra", Events: 4, WithValue: 2, P50: 200, P95: 290},
+		{Label: "ams", Events: 3},
+		{Label: "s00", Events: 1, WithValue: 1, P50: 1, P95: 1},
+	}
+	if got := v.Values.Rows[:3]; !reflect.DeepEqual(got, want) {
+		t.Errorf("rows = %+v", got)
+	}
+
+	var b strings.Builder
+	if err := propValues(v.Values).Render(ctx, &b); err != nil {
+		t.Fatal(err)
+	}
+	if html := b.String(); !strings.Contains(html, "2 with value") || strings.Count(html, "with value") != 1 {
+		t.Errorf("only fra has some events without a value: %s", html)
 	}
 }

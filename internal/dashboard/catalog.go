@@ -229,7 +229,8 @@ func (d *dashboard) loadPropValues(ctx context.Context, appID, name, rng, key st
 	return v, nil
 }
 
-func (v propValuesView) hasValues() bool {
+// rowsHaveValue reports whether any shown label has events with a value.
+func (v propValuesView) rowsHaveValue() bool {
 	return slices.ContainsFunc(v.Rows, func(r db.EventTopValuesRow) bool { return r.WithValue > 0 })
 }
 

@@ -143,17 +143,32 @@ func (q *Queries) EventPropKeys(ctx context.Context, arg EventPropKeysParams) ([
 }
 
 const eventTopValues = `-- name: EventTopValues :many
-SELECT left(props ->> $1::text, 200)::text AS label,
-       count(*) AS events,
-       count(value) AS with_value,
-       coalesce(percentile_cont(0.5) WITHIN GROUP (ORDER BY value), 0)::double precision AS p50,
-       coalesce(percentile_cont(0.95) WITHIN GROUP (ORDER BY value), 0)::double precision AS p95
-FROM events
-WHERE app_id = $2 AND name = $3 AND ts >= $4 AND ts < $5
-  AND props ->> $1::text IS NOT NULL
-GROUP BY label
-ORDER BY events DESC, label
-LIMIT 10
+WITH top AS (
+    SELECT left(n.props ->> $1::text, 200)::text AS label, count(*) AS events
+    FROM events n
+    WHERE n.app_id = $2 AND n.name = $3 AND n.ts >= $4 AND n.ts < $5
+      AND n.props ->> $1::text IS NOT NULL
+    GROUP BY 1
+    ORDER BY 2 DESC, 1
+    LIMIT 10
+), measured AS (
+    SELECT left(e.props ->> $1::text, 200)::text AS label,
+           count(*) AS with_value,
+           percentile_cont(ARRAY[0.5, 0.95]::double precision[]) WITHIN GROUP (ORDER BY e.value) AS p
+    FROM events e
+    WHERE e.app_id = $2 AND e.name = $3 AND e.ts >= $4 AND e.ts < $5
+      AND e.value IS NOT NULL
+      AND left(e.props ->> $1::text, 200) IN (SELECT top.label FROM top)
+    GROUP BY 1
+)
+SELECT t.label,
+       t.events,
+       coalesce(m.with_value, 0)::bigint AS with_value,
+       coalesce(m.p[1], 0)::double precision AS p50,
+       coalesce(m.p[2], 0)::double precision AS p95
+FROM top t
+LEFT JOIN measured m ON m.label = t.label
+ORDER BY t.events DESC, t.label
 `
 
 type EventTopValuesParams struct {
@@ -172,6 +187,8 @@ type EventTopValuesRow struct {
 	P95       float64
 }
 
+// Percentiles are computed only for the top labels, since a key can have a
+// distinct value on every row.
 func (q *Queries) EventTopValues(ctx context.Context, arg EventTopValuesParams) ([]EventTopValuesRow, error) {
 	rows, err := q.db.Query(ctx, eventTopValues,
 		arg.Key,
