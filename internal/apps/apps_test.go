@@ -121,6 +121,12 @@ func TestDelete(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := q.CreateView(ctx, db.CreateViewParams{
+		AppID: "demo", Title: "Opens", Event: "app.open", Measures: []string{"count"},
+		Filter: []byte("{}"), Shape: "table", MaxViews: 20,
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := Delete(ctx, q, "demo"); err != nil {
 		t.Fatal(err)
@@ -136,7 +142,13 @@ func TestDelete(t *testing.T) {
 		t.Errorf("events left: demo %d, other %d; want 0 and 1", demo, other)
 	}
 
-	if err := Delete(ctx, q, "demo"); !errors.Is(err, ErrNotFound) {
-		t.Errorf("second delete: %v, want ErrNotFound", err)
+	if views, err := q.ListViews(ctx, "demo"); err != nil || len(views) != 0 {
+		t.Errorf("views of deleted app: %d, %v", len(views), err)
+	}
+
+	for _, id := range []string{"demo", "Bad_ID", "\xff"} {
+		if err := Delete(ctx, q, id); !errors.Is(err, ErrNotFound) {
+			t.Errorf("Delete(%q) = %v, want ErrNotFound", id, err)
+		}
 	}
 }

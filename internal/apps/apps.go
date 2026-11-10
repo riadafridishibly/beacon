@@ -110,6 +110,9 @@ func Revoke(ctx context.Context, q *db.Queries, prefix string) (string, error) {
 
 // Delete removes an app with its ingest keys, views and events.
 func Delete(ctx context.Context, q *db.Queries, id string) error {
+	if !ValidID(id) {
+		return ErrNotFound
+	}
 	n, err := q.DeleteApp(ctx, id)
 	if err != nil {
 		return fmt.Errorf("delete app: %w", err)
