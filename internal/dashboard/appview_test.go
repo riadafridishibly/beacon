@@ -21,8 +21,10 @@ func TestParseFilter(t *testing.T) {
 	for in, want := range map[string]string{
 		"":   "{}",
 		"{}": "{}",
-		`{"platform": "macos", "props.result": "ok"}`: `{"platform":"macos","props.result":"ok"}`,
-		`{"props.cold": true, "props.n": 1}`:          `{"props.cold":true,"props.n":1}`,
+		`{"platform": "macos", "props.result": "ok"}`:         `{"platform":"macos","props.result":"ok"}`,
+		`{"props.cold": true, "props.n": 1}`:                  `{"props.cold":true,"props.n":1}`,
+		`{"props.path": "C:\\u0000x"}`:                        `{"props.path":"C:\\u0000x"}`,
+		`{"props.city": "` + strings.Repeat("ж", 1500) + `"}`: `{"props.city":"` + strings.Repeat("ж", 1500) + `"}`,
 	} {
 		got, msg := parseFilter(in)
 		if msg != "" || string(got) != want {
@@ -30,11 +32,27 @@ func TestParseFilter(t *testing.T) {
 		}
 	}
 	for _, in := range []string{
-		"null", "[]", `"x"`, "{", `{"result": "ok"}`, `{"props.": 1}`, `{"platform": 1}`,
-		`{"props.x": "\u0000"}`, `{"props.x": "` + strings.Repeat("a", maxFilterLen) + `"}`,
+		"null", "[]", `"x"`, "{", `{"result": "ok"}`, `{"props.": 1}`, `{"platform": 1}`, `{"platform": null}`,
+		`{"props.x": "\u0000"}`, `{"props.x": {"a": ["\u0000"]}}`, `{"props.x": {"\u0000": 1}}`, `{"props.x": "` + strings.Repeat("a", maxFilterLen) + `"}`,
 	} {
 		if _, msg := parseFilter(in); msg == "" {
 			t.Errorf("parseFilter(%q) accepted", in)
+		}
+	}
+}
+
+func TestValidateTitle(t *testing.T) {
+	t.Parallel()
+	for title, want := range map[string]string{
+		"Connect time":           "",
+		"":                       "Enter a title.",
+		"a\x00b":                 "Remove the NUL character.",
+		strings.Repeat("a", 101): "Use at most 100 characters.",
+	} {
+		f := viewForm{Title: title, Event: "vpn.connect", Agg: "count"}
+		f.validate()
+		if f.TitleError != want {
+			t.Errorf("title %.20q: error %q, want %q", title, f.TitleError, want)
 		}
 	}
 }
@@ -108,13 +126,14 @@ func TestOverviewViews(t *testing.T) {
 	createView(t, pool, db.CreateViewParams{Title: "Windows", Event: "vpn.connect", Agg: "count", GroupBy: "props.server", Filter: []byte(`{"platform":"windows"}`)})
 	createView(t, pool, db.CreateViewParams{Title: "Daily", Event: "vpn.connect", Agg: "count", Filter: ok})
 	createView(t, pool, db.CreateViewParams{Title: "Sum", Event: "vpn.connect", Agg: "sum", GroupBy: "platform"})
+	createView(t, pool, db.CreateViewParams{Title: "Broken", Event: "vpn.connect", Agg: "count", GroupBy: "city"})
 	d := &dashboard{pool: pool, q: db.New(pool), nowFunc: func() time.Time { return now }}
 
 	v, err := d.loadOverview(context.Background(), "alpha", "7d")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(v.Views) != 4 {
+	if len(v.Views) != 5 {
 		t.Fatalf("views = %d", len(v.Views))
 	}
 	type row struct {
@@ -144,6 +163,9 @@ func TestOverviewViews(t *testing.T) {
 	}
 	if rows := v.Views[3].Groups.Rows; len(rows) != 2 || rows[0].Label != "macos" || rows[0].Total != 5480 || rows[1].Total != 50 {
 		t.Errorf("sum = %+v", rows)
+	}
+	if broken := v.Views[4]; !broken.Failed || broken.Title != "Broken" || v.Views[3].Failed {
+		t.Errorf("a view that can't be computed = %+v", broken)
 	}
 }
 

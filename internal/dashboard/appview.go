@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"math"
 	"net/http"
@@ -68,33 +69,56 @@ func parseField(s string) (column, propKey string, ok bool) {
 // parseFilter checks a filter typed into the form and returns it as compact
 // JSON with sorted keys.
 func parseFilter(s string) ([]byte, string) {
+	const notObject = `Use a JSON object, such as {"props.result": "ok"}.`
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return []byte("{}"), ""
 	}
-	if len(s) > maxFilterLen {
+	if utf8.RuneCountInString(s) > maxFilterLen {
 		return nil, "Use at most 2,000 characters."
 	}
-	// PostgreSQL rejects NUL in jsonb.
 	var m map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(s), &m); err != nil || m == nil || strings.Contains(s, `\u0000`) {
-		return nil, `Use a JSON object, such as {"props.result": "ok"}.`
+	if err := json.Unmarshal([]byte(s), &m); err != nil || m == nil {
+		return nil, notObject
 	}
 	for k, raw := range m {
 		column, _, ok := parseField(k)
 		if !ok {
 			return nil, fmt.Sprintf("%q is not a column (platform, app_version, country) or props.<key>.", k)
 		}
-		var text string
-		if column != "" && json.Unmarshal(raw, &text) != nil {
+		var value any
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return nil, notObject
+		}
+		if _, text := value.(string); column != "" && !text {
 			return nil, fmt.Sprintf("%s takes a string.", k)
+		}
+		if hasNUL(value) {
+			return nil, `Remove \u0000, which PostgreSQL can't store.`
 		}
 	}
 	b, err := json.Marshal(m)
 	if err != nil {
-		return nil, `Use a JSON object, such as {"props.result": "ok"}.`
+		return nil, notObject
 	}
 	return b, ""
+}
+
+// hasNUL reports whether a decoded JSON value has a NUL in any string.
+func hasNUL(v any) bool {
+	switch v := v.(type) {
+	case string:
+		return strings.ContainsRune(v, 0)
+	case []any:
+		return slices.ContainsFunc(v, hasNUL)
+	case map[string]any:
+		for k, e := range v {
+			if strings.ContainsRune(k, 0) || hasNUL(e) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // viewQuery is a view's grouping and filter as query parameters.
@@ -184,13 +208,15 @@ func aggValue(agg string, events, devices, withValue int64, total, p50, p95 floa
 }
 
 // viewCard is a view computed over the overview's range. Chart is set for a
-// view without group_by, Groups otherwise.
+// view without group_by, Groups otherwise. Failed is set instead when the
+// view couldn't be computed.
 type viewCard struct {
 	ID      int64
 	Title   string
 	Summary string
 	Chart   chartView
 	Groups  *viewGroups
+	Failed  bool
 }
 
 type viewGroups struct {
@@ -200,6 +226,8 @@ type viewGroups struct {
 	Rows   []db.ViewGroupsRow
 }
 
+// loadViewCards gives a view that fails its own error card, so one view
+// can't break the overview. A timeout still fails the page.
 func (d *dashboard) loadViewCards(ctx context.Context, appID string, since, until time.Time, days []time.Time) ([]viewCard, error) {
 	views, err := d.q.ListViews(ctx, appID)
 	if err != nil {
@@ -207,35 +235,47 @@ func (d *dashboard) loadViewCards(ctx context.Context, appID string, since, unti
 	}
 	cards := make([]viewCard, 0, len(views))
 	for _, v := range views {
-		q, err := newViewQuery(v)
+		c, err := d.viewCard(ctx, v, since, until, days)
 		if err != nil {
-			return nil, err
-		}
-		c := viewCard{ID: v.ID, Title: v.Title, Summary: describeView(v)}
-		if v.GroupBy == "" {
-			rows, err := d.q.ViewDaily(ctx, db.ViewDailyParams{
-				AppID: appID, Name: v.Event, Since: since, Until: until,
-				PropsFilter: q.PropsFilter, Platform: q.Platform, AppVersion: q.AppVersion, Country: q.Country,
-			})
-			if err != nil {
-				return nil, fmt.Errorf("view %d: %w", v.ID, err)
+			if ctx.Err() != nil {
+				return nil, err
 			}
-			c.Chart = viewChart(v, days, rows)
-		} else {
-			rows, err := d.q.ViewGroups(ctx, db.ViewGroupsParams{
-				AppID: appID, Name: v.Event, Since: since, Until: until,
-				Dimension: q.Dimension, PropKey: q.PropKey,
-				PropsFilter: q.PropsFilter, Platform: q.Platform, AppVersion: q.AppVersion, Country: q.Country,
-				GroupLimit: viewGroupLimit,
-			})
-			if err != nil {
-				return nil, fmt.Errorf("view %d: %w", v.ID, err)
-			}
-			c.Groups = groupsFor(v, rows)
+			slog.ErrorContext(ctx, "view failed", "app", appID, "view", v.ID, "err", err)
+			c = viewCard{ID: v.ID, Title: v.Title, Summary: describeView(v), Failed: true}
 		}
 		cards = append(cards, c)
 	}
 	return cards, nil
+}
+
+func (d *dashboard) viewCard(ctx context.Context, v db.AppView, since, until time.Time, days []time.Time) (viewCard, error) {
+	q, err := newViewQuery(v)
+	if err != nil {
+		return viewCard{}, err
+	}
+	c := viewCard{ID: v.ID, Title: v.Title, Summary: describeView(v)}
+	if v.GroupBy == "" {
+		rows, err := d.q.ViewDaily(ctx, db.ViewDailyParams{
+			AppID: v.AppID, Name: v.Event, Since: since, Until: until,
+			PropsFilter: q.PropsFilter, Platform: q.Platform, AppVersion: q.AppVersion, Country: q.Country,
+		})
+		if err != nil {
+			return viewCard{}, err
+		}
+		c.Chart = viewChart(v, days, rows)
+		return c, nil
+	}
+	rows, err := d.q.ViewGroups(ctx, db.ViewGroupsParams{
+		AppID: v.AppID, Name: v.Event, Since: since, Until: until,
+		Dimension: q.Dimension, PropKey: q.PropKey,
+		PropsFilter: q.PropsFilter, Platform: q.Platform, AppVersion: q.AppVersion, Country: q.Country,
+		GroupLimit: viewGroupLimit,
+	})
+	if err != nil {
+		return viewCard{}, err
+	}
+	c.Groups = groupsFor(v, rows)
+	return c, nil
 }
 
 func viewChart(v db.AppView, days []time.Time, rows []db.ViewDailyRow) chartView {
@@ -310,7 +350,9 @@ func (f *viewForm) validate() []byte {
 	switch n := utf8.RuneCountInString(f.Title); {
 	case n == 0:
 		f.TitleError = "Enter a title."
-	case n > maxTitleLen || !validText(f.Title):
+	case !validText(f.Title):
+		f.TitleError = "Remove the NUL character."
+	case n > maxTitleLen:
 		f.TitleError = "Use at most 100 characters."
 	}
 	if !ingest.ValidName(f.Event) {

@@ -135,7 +135,13 @@ func viewFormTitle(f viewForm) string {
 }
 
 templ viewCardSection(c viewCard) {
-	if c.Groups == nil {
+	if c.Failed {
+		<section class={ web.PaddedCardClass, "min-w-0" }>
+			<h2 class="font-semibold wrap-break-word">{ c.Title }</h2>
+			<p class="text-sm wrap-anywhere opacity-60">{ c.Summary }</p>
+			<p class="mt-4 text-sm text-error">This view couldn't be loaded. The server log has the reason.</p>
+		</section>
+	} else if c.Groups == nil {
 		@chartCard(c.Chart)
 	} else {
 		<section class={ web.PaddedCardClass, "min-w-0" }>
