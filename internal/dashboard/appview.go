@@ -311,22 +311,31 @@ func viewChart(v db.AppView, days []time.Time, rows []db.ViewDailyRow) chartView
 		r := byDay[dayKey(day)]
 		values[i] = aggValue(v.Agg, r.Events, r.Devices, r.WithValue, r.Total, r.P50, r.P95)
 	}
+	kind := columnChart
+	if v.Agg == "p50" || v.Agg == "p95" {
+		kind = lineChart
+	}
+	return layout(viewChartData(v, days, kind, []series{withValues(slot1, aggLabel(v.Agg), values)}))
+}
+
+// viewChartData is the chart of a view's series. A measure of value plots
+// zeros, since a zero there is what the app sent.
+func viewChartData(v db.AppView, days []time.Time, kind chartKind, s []series) chartData {
 	c := chartData{
-		Title: v.Title,
-		Note:  describeView(v),
-		Empty: "No matching " + v.Event + " events in this range.",
-		Kind:  columnChart, Days: days, Format: countFormat,
-		Series: []series{withValues(slot1, aggLabel(v.Agg), values)},
+		Title:  v.Title,
+		Note:   describeView(v),
+		Empty:  "No matching " + v.Event + " events in this range.",
+		Kind:   kind,
+		Days:   days,
+		Format: countFormat,
+		Series: s,
 	}
 	switch v.Agg {
-	case "sum":
-		c.Format = numberFormat
-		c.Empty = "No matching " + v.Event + " events with a value in this range."
-	case "p50", "p95":
-		c.Kind, c.Format, c.PlotZeros = lineChart, numberFormat, true
+	case "sum", "p50", "p95":
+		c.Format, c.PlotZeros = numberFormat, true
 		c.Empty = "No matching " + v.Event + " events with a value in this range."
 	}
-	return layout(c)
+	return c
 }
 
 // groupLines draws a line per group. The rows come grouped, with Other
@@ -345,7 +354,7 @@ func groupLines(v db.AppView, days []time.Time, rows []db.ViewGroupsDailyRow) ch
 			if !r.Other {
 				s = slots[len(lines)%len(slots)]
 			}
-			s.Name, s.FullName = seriesName(r.Label, r.Other)
+			s.Name, s.FullName, s.Placeholder = seriesName(r.Label, r.Other)
 			s.Values = make([]*float64, len(days))
 			for j := range s.Values {
 				s.Values[j] = aggValue(v.Agg, 0, 0, 0, 0, 0, 0)
@@ -357,38 +366,27 @@ func groupLines(v db.AppView, days []time.Time, rows []db.ViewGroupsDailyRow) ch
 			lines[len(lines)-1].Values[j] = aggValue(v.Agg, r.Events, r.Devices, r.WithValue, r.Total, r.P50, r.P95)
 		}
 	}
-	c := chartData{
-		Title:  v.Title,
-		Note:   describeView(v),
-		Empty:  "No matching " + v.Event + " events in this range.",
-		Kind:   lineChart,
-		Days:   days,
-		Format: countFormat,
-		Series: lines,
-	}
+	c := viewChartData(v, days, lineChart, lines)
+	c.Legend = true
 	if other {
 		c.Note += " · Other pools the remaining groups"
-	}
-	switch v.Agg {
-	case "sum", "p50", "p95":
-		c.Format, c.PlotZeros = numberFormat, true
-		c.Empty = "No matching " + v.Event + " events with a value in this range."
 	}
 	return layout(c)
 }
 
 // seriesName shortens a group's label for the legend and tooltip, and
-// returns the full label when it did.
-func seriesName(label string, other bool) (name, full string) {
+// returns the full label when it did. placeholder is set for a name the
+// dashboard made up, which the page sets apart from labels the app sent.
+func seriesName(label string, other bool) (name, full string, placeholder bool) {
 	switch {
 	case other:
-		return "Other", ""
+		return "Other", "", true
 	case label == "":
-		return "Unknown", ""
+		return "Unknown", "", true
 	case utf8.RuneCountInString(label) <= maxSeriesName:
-		return label, ""
+		return label, "", false
 	}
-	return string([]rune(label)[:maxSeriesName-1]) + "…", label
+	return string([]rune(label)[:maxSeriesName-1]) + "…", label, false
 }
 
 // groupsFor orders the groups by the view's measure. Ties keep the query's
@@ -451,11 +449,13 @@ func (f *viewForm) validate() []byte {
 			f.GroupByError = "Use platform, app_version, country or props.<key>."
 		}
 	}
-	switch {
-	case !slices.ContainsFunc(shapes, func(s option) bool { return s.ID == f.Shape }):
+	if !slices.ContainsFunc(shapes, func(s option) bool { return s.ID == f.Shape }) {
 		f.ShapeError = "Choose a table or lines."
-	case f.Shape == "line" && f.GroupBy == "":
-		f.ShapeError = "Lines need a group by."
+	}
+	// The shape has nothing to arrange without groups, and the database
+	// keeps lines to grouped views.
+	if f.GroupBy == "" {
+		f.Shape = "table"
 	}
 	filter, msg := parseFilter(f.Filter)
 	f.FilterError = msg

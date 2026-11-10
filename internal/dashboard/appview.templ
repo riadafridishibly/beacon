@@ -114,7 +114,7 @@ templ viewFormPage(nav *web.Nav, app db.App, f viewForm) {
 						<option value={ s.ID } selected?={ s.ID == f.Shape }>{ s.Label }</option>
 					}
 				</select>
-				<p class="text-sm opacity-60">A table of the top { strconv.Itoa(viewGroupLimit) } groups by count, or a line for each of the top { strconv.Itoa(viewLineLimit) } and one for the rest. Only with a group by.</p>
+				<p class="text-sm opacity-60">A table of the top { strconv.Itoa(viewGroupLimit) } groups by count, or a line for each of the top { strconv.Itoa(viewLineLimit) } and one for the rest. Without a group by, it's a chart by day.</p>
 			}
 			@web.Field("Filter", "filter", f.FilterError) {
 				<textarea
@@ -188,7 +188,7 @@ templ viewTable(g *viewGroups) {
 					<tr>
 						<td class="max-w-64">
 							if r.Label == "" {
-								<span class="opacity-60">Unknown</span>
+								<span class="italic opacity-60">Unknown</span>
 							} else {
 								<span class="line-clamp-2 wrap-anywhere" title={ r.Label }>{ r.Label }</span>
 							}

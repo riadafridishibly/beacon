@@ -43,12 +43,16 @@ const (
 // series is one line or set of columns. Stroke and Fill are Tailwind classes
 // written out in full so the stylesheet build finds them. A nil value is a
 // day with nothing to plot. FullName is set when Name is shortened.
+// Placeholder marks a Name the dashboard made up. Back draws the series
+// behind the others.
 type series struct {
-	Name     string
-	FullName string
-	Stroke   string
-	Fill     string
-	Values   []*float64
+	Name        string
+	FullName    string
+	Placeholder bool
+	Back        bool
+	Stroke      string
+	Fill        string
+	Values      []*float64
 }
 
 var (
@@ -63,7 +67,7 @@ var (
 		{Stroke: "stroke-chart-5", Fill: "fill-chart-5"},
 	}
 	// slotOther is a gray for a series that pools the rest.
-	slotOther = series{Stroke: "stroke-chart-other", Fill: "fill-chart-other"}
+	slotOther = series{Stroke: "stroke-chart-other", Fill: "fill-chart-other", Back: true}
 )
 
 // valueFormat says how a chart's values read on its axis and in its tooltip.
@@ -108,6 +112,9 @@ type chartData struct {
 	// PlotZeros draws a chart whose values are all zero. Otherwise such a
 	// chart has nothing to show.
 	PlotZeros bool
+	// Legend shows the legend for a single series, whose name the title
+	// doesn't give.
+	Legend bool
 }
 
 type chartTick struct {
@@ -144,10 +151,11 @@ type chartLine struct {
 }
 
 type tooltipRow struct {
-	Stroke string
-	Value  string
-	Name   string
-	Y      float64
+	Stroke      string
+	Value       string
+	Name        string
+	Placeholder bool
+	Y           float64
 }
 
 type chartHit struct {
@@ -225,8 +233,12 @@ func layout(c chartData) chartView {
 			v.Bars = append(v.Bars, chartBar{Center: pct(center(i)), Y: plotBase - h, Height: h + barOverhang})
 		}
 	case lineChart:
-		for _, s := range c.Series {
-			v.Lines = append(v.Lines, lineFor(s, n, center, y))
+		for _, back := range []bool{true, false} {
+			for _, s := range c.Series {
+				if s.Back == back {
+					v.Lines = append(v.Lines, lineFor(s, n, center, y))
+				}
+			}
 		}
 	}
 
@@ -283,7 +295,7 @@ func tooltipFor(c chartData, i int, day time.Time, center float64) tooltip {
 	textChars := 0
 	for r, s := range c.Series {
 		row := tooltipRow{
-			Stroke: s.Stroke, Name: s.Name, Value: "No data",
+			Stroke: s.Stroke, Name: s.Name, Placeholder: s.Placeholder, Value: "No data",
 			Y: plotTop + 22 + float64(r+1)*tooltipRowPx,
 		}
 		if p := s.Values[i]; p != nil {

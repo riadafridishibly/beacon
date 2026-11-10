@@ -216,8 +216,11 @@ func TestViewEditor(t *testing.T) {
 		}
 	}
 	ungrouped := url.Values{"title": {"Lines"}, "event": {"vpn.connect"}, "agg": {"count"}, "shape": {"line"}}
-	if w := c.do(http.MethodPost, path, ungrouped); w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "Lines need a group by.") {
-		t.Errorf("lines without a group: %d", w.Code)
+	if w := c.do(http.MethodPost, path, ungrouped); w.Code != http.StatusSeeOther {
+		t.Fatalf("lines without a group: %d", w.Code)
+	}
+	if v, err := db.New(pool).GetView(context.Background(), db.GetViewParams{AppID: "alpha", ID: id}); err != nil || v.Shape != "table" {
+		t.Errorf("lines without a group stored %+v, %v", v, err)
 	}
 
 	form.Set("shape", "line")
@@ -227,7 +230,10 @@ func TestViewEditor(t *testing.T) {
 	if w := c.do(http.MethodGet, path, nil); !strings.Contains(w.Body.String(), `<option value="line" selected>`) {
 		t.Error("edit form misses the stored shape")
 	}
-	if body := c.do(http.MethodGet, "/apps/alpha", nil).Body.String(); !strings.Contains(body, "per day") || !strings.Contains(body, "stroke-chart-2") {
+	// The tooltip names groups only on a line chart, and the table titles
+	// them only in a table.
+	if body := c.do(http.MethodGet, "/apps/alpha", nil).Body.String(); !strings.Contains(body, `<tspan class="fill-base-content/60">fra</tspan>`) ||
+		strings.Contains(body, `title="fra"`) {
 		t.Error("overview misses the lines")
 	}
 	form.Del("shape")
@@ -347,6 +353,21 @@ func TestViewLines(t *testing.T) {
 	}
 	if !strings.HasSuffix(count.Note, "per day · Other pools the remaining groups") {
 		t.Errorf("note = %q", count.Note)
+	}
+	var placeholders []string
+	for _, s := range count.Series {
+		if s.Placeholder {
+			placeholders = append(placeholders, s.Name)
+		}
+	}
+	if fmt.Sprint(placeholders) != "[Unknown Other]" {
+		t.Errorf("placeholders = %v", placeholders)
+	}
+	if first := count.Lines[0].Series.Name; first != "Other" || len(count.Lines) != 6 {
+		t.Errorf("drawn first: %q of %d lines", first, len(count.Lines))
+	}
+	if !count.Legend {
+		t.Error("grouped lines have no legend")
 	}
 
 	p95 := v.Views[1].Chart
