@@ -70,7 +70,7 @@ func TestConformanceBatch(t *testing.T) {
 	if len(got) != len(batch.Events) {
 		t.Fatalf("%d rows, want %d", len(got), len(batch.Events))
 	}
-	if got[1].Name != "sync.done" || got[1].DeviceID != "fixed-id" || *got[1].UserID != "tester@example.com" ||
+	if got[1].Name != "sync.done" || got[1].DeviceID != "id-1" || *got[1].UserID != "tester@example.com" ||
 		*got[1].AppVersion != "1.4.0" || *got[1].Platform != "macos" || *got[1].Value != 812 {
 		t.Errorf("row %+v", got[1])
 	}

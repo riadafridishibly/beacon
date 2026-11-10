@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, UNIX_EPOCH};
 
 use serde::Deserialize;
@@ -117,8 +118,9 @@ fn conformance_batch() {
     cfg.platform = "macos".into();
     cfg.os_version = "15.1".into();
     cfg.allow_props = vec!["cold".into()];
+    let ids = AtomicUsize::new(0);
     let tuning = Tuning {
-        new_id: Arc::new(|| Ok("fixed-id".to_string())),
+        new_id: Arc::new(move || Ok(format!("id-{}", ids.fetch_add(1, Ordering::Relaxed) + 1))),
         now: Arc::new(|| UNIX_EPOCH + Duration::from_secs(1_794_139_140)),
         ..crate::tests::tuning()
     };

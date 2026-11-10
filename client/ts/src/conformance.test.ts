@@ -55,12 +55,13 @@ test("conformance: responses", () => {
 
 test("conformance: batch body", async (t) => {
   const srv = await startServer(t);
+  let ids = 0;
   const c = await createClient({
     ...(await srv.options(t)),
     appVersion: "1.4.0",
     platform: "macos",
     osVersion: "15.1",
-    randomId: () => "fixed-id",
+    randomId: () => `id-${++ids}`,
     now: () => Date.UTC(2026, 10, 8, 11, 59, 0),
     allowProps: ["cold"],
   });

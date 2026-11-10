@@ -3,6 +3,7 @@
 package ingest
 
 import (
+	"bytes"
 	"compress/gzip"
 	"context"
 	"encoding/json"
@@ -131,17 +132,27 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	now := h.now()
 	country, city := h.Geo.Lookup(clientAddr(r))
-	rows := make([]db.InsertEventsParams, len(batch.Events))
+	rows := make([]row, len(batch.Events))
 	for i, e := range batch.Events {
-		row, err := toRow(appID, batch.Context, e, now)
+		row, err := toRow(batch.Context, e, now)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error(), i)
 			return
 		}
-		row.Country, row.City = opt(country), opt(city)
 		rows[i] = row
 	}
-	if _, err := h.DB.InsertEvents(r.Context(), rows); err != nil {
+	var events bytes.Buffer
+	enc := json.NewEncoder(&events)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(rows); err != nil {
+		slog.ErrorContext(r.Context(), "encode events", "app", appID, "err", err)
+		writeError(w, http.StatusInternalServerError, "internal error", -1)
+		return
+	}
+	stored, err := h.DB.IngestEvents(r.Context(), db.IngestEventsParams{
+		AppID: appID, Country: opt(country), City: opt(city), Events: events.Bytes(),
+	})
+	if err != nil {
 		var pgErr *pgconn.PgError
 		errors.As(err, &pgErr)
 		// The app was deleted while the Resolver still caches its key.
@@ -159,6 +170,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		slog.ErrorContext(r.Context(), "insert events", "app", appID, "err", err)
 		writeError(w, http.StatusInternalServerError, "internal error", -1)
 		return
+	}
+	if skipped := int64(len(rows)) - stored; skipped > 0 {
+		slog.InfoContext(r.Context(), "skipped events already stored", "app", appID, "events", skipped)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
@@ -223,7 +237,23 @@ func (l *limitReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-func toRow(appID string, shared Fields, e Event, now time.Time) (db.InsertEventsParams, error) {
+// row is an event as IngestEvents reads it. An empty string is stored as
+// NULL.
+type row struct {
+	EventID    string          `json:"event_id,omitempty"`
+	Name       string          `json:"name"`
+	TS         time.Time       `json:"ts"`
+	DeviceID   string          `json:"device_id"`
+	UserID     string          `json:"user_id,omitempty"`
+	SessionID  string          `json:"session_id,omitempty"`
+	AppVersion string          `json:"app_version,omitempty"`
+	Platform   string          `json:"platform,omitempty"`
+	OSVersion  string          `json:"os_version,omitempty"`
+	Value      *float64        `json:"value,omitempty"`
+	Props      json.RawMessage `json:"props,omitempty"`
+}
+
+func toRow(shared Fields, e Event, now time.Time) (row, error) {
 	f := e.Fields
 	f.DeviceID = or(f.DeviceID, shared.DeviceID)
 	f.UserID = or(f.UserID, shared.UserID)
@@ -234,17 +264,17 @@ func toRow(appID string, shared Fields, e Event, now time.Time) (db.InsertEvents
 
 	switch {
 	case !ValidName(e.Name):
-		return db.InsertEventsParams{}, fmt.Errorf("name %q must be at most %d lowercase letters, digits and underscores, in dot-separated parts", e.Name, maxNameLen)
+		return row{}, fmt.Errorf("name %q must be at most %d lowercase letters, digits and underscores, in dot-separated parts", e.Name, maxNameLen)
 	case f.DeviceID == "":
-		return db.InsertEventsParams{}, errors.New("device_id is required")
+		return row{}, errors.New("device_id is required")
 	case len(f.DeviceID) > maxIDLen || len(f.SessionID) > maxIDLen || len(e.EventID) > maxIDLen:
-		return db.InsertEventsParams{}, fmt.Errorf("device_id, session_id and event_id must be at most %d bytes", maxIDLen)
+		return row{}, fmt.Errorf("device_id, session_id and event_id must be at most %d bytes", maxIDLen)
 	case len(f.UserID) > maxUserLen:
-		return db.InsertEventsParams{}, fmt.Errorf("user_id must be at most %d bytes", maxUserLen)
+		return row{}, fmt.Errorf("user_id must be at most %d bytes", maxUserLen)
 	case len(f.AppVersion) > maxAttrLen || len(f.Platform) > maxAttrLen || len(f.OSVersion) > maxAttrLen:
-		return db.InsertEventsParams{}, fmt.Errorf("app_version, platform and os_version must be at most %d bytes", maxAttrLen)
+		return row{}, fmt.Errorf("app_version, platform and os_version must be at most %d bytes", maxAttrLen)
 	case hasNUL(f.DeviceID, f.UserID, f.SessionID, f.AppVersion, f.Platform, f.OSVersion, e.EventID):
-		return db.InsertEventsParams{}, errors.New("device_id, user_id, session_id, app_version, platform, os_version and event_id must not contain NUL")
+		return row{}, errors.New("device_id, user_id, session_id, app_version, platform, os_version and event_id must not contain NUL")
 	}
 
 	props := e.Props
@@ -253,13 +283,13 @@ func toRow(appID string, shared Fields, e Event, now time.Time) (db.InsertEvents
 	}
 	if len(props) > 0 {
 		if props[0] != '{' {
-			return db.InsertEventsParams{}, errors.New("props must be a JSON object")
+			return row{}, errors.New("props must be a JSON object")
 		}
 		if len(props) > maxProps {
-			return db.InsertEventsParams{}, fmt.Errorf("props must be at most %d bytes", maxProps)
+			return row{}, fmt.Errorf("props must be at most %d bytes", maxProps)
 		}
 		if !storableJSON(props) {
-			return db.InsertEventsParams{}, errors.New(`props must be valid UTF-8, without \u0000 or unpaired surrogates`)
+			return row{}, errors.New(`props must be valid UTF-8, without \u0000 or unpaired surrogates`)
 		}
 	}
 
@@ -269,17 +299,20 @@ func toRow(appID string, shared Fields, e Event, now time.Time) (db.InsertEvents
 	if e.TS != nil && !e.TS.IsZero() && e.TS.Before(now.Add(maxFutureTS)) {
 		ts = *e.TS
 	}
+	// Postgres keeps microseconds and rounds the text form, which could move
+	// an event just before midnight into the next day.
+	ts = ts.Truncate(time.Microsecond)
 
-	return db.InsertEventsParams{
-		AppID:      appID,
+	return row{
+		EventID:    e.EventID,
 		Name:       e.Name,
-		Ts:         ts,
+		TS:         ts,
 		DeviceID:   f.DeviceID,
-		UserID:     opt(f.UserID),
-		SessionID:  opt(f.SessionID),
-		AppVersion: opt(f.AppVersion),
-		Platform:   opt(f.Platform),
-		OSVersion:  opt(f.OSVersion),
+		UserID:     f.UserID,
+		SessionID:  f.SessionID,
+		AppVersion: f.AppVersion,
+		Platform:   f.Platform,
+		OSVersion:  f.OSVersion,
 		Value:      e.Value,
 		Props:      props,
 	}, nil
