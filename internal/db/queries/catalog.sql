@@ -60,7 +60,11 @@ ORDER BY count(*) DESC, k.key
 LIMIT @key_limit;
 
 -- name: EventTopValues :many
-SELECT left(props ->> @key::text, 200)::text AS label, count(*) AS events
+SELECT left(props ->> @key::text, 200)::text AS label,
+       count(*) AS events,
+       count(value) AS with_value,
+       coalesce(percentile_cont(0.5) WITHIN GROUP (ORDER BY value), 0)::double precision AS p50,
+       coalesce(percentile_cont(0.95) WITHIN GROUP (ORDER BY value), 0)::double precision AS p95
 FROM events
 WHERE app_id = @app_id AND name = @name AND ts >= @since AND ts < @until
   AND props ->> @key::text IS NOT NULL

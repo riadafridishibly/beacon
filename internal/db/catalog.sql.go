@@ -143,7 +143,11 @@ func (q *Queries) EventPropKeys(ctx context.Context, arg EventPropKeysParams) ([
 }
 
 const eventTopValues = `-- name: EventTopValues :many
-SELECT left(props ->> $1::text, 200)::text AS label, count(*) AS events
+SELECT left(props ->> $1::text, 200)::text AS label,
+       count(*) AS events,
+       count(value) AS with_value,
+       coalesce(percentile_cont(0.5) WITHIN GROUP (ORDER BY value), 0)::double precision AS p50,
+       coalesce(percentile_cont(0.95) WITHIN GROUP (ORDER BY value), 0)::double precision AS p95
 FROM events
 WHERE app_id = $2 AND name = $3 AND ts >= $4 AND ts < $5
   AND props ->> $1::text IS NOT NULL
@@ -161,8 +165,11 @@ type EventTopValuesParams struct {
 }
 
 type EventTopValuesRow struct {
-	Label  string
-	Events int64
+	Label     string
+	Events    int64
+	WithValue int64
+	P50       float64
+	P95       float64
 }
 
 func (q *Queries) EventTopValues(ctx context.Context, arg EventTopValuesParams) ([]EventTopValuesRow, error) {
@@ -180,7 +187,13 @@ func (q *Queries) EventTopValues(ctx context.Context, arg EventTopValuesParams) 
 	items := []EventTopValuesRow{}
 	for rows.Next() {
 		var i EventTopValuesRow
-		if err := rows.Scan(&i.Label, &i.Events); err != nil {
+		if err := rows.Scan(
+			&i.Label,
+			&i.Events,
+			&i.WithValue,
+			&i.P50,
+			&i.P95,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

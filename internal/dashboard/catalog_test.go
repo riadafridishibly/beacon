@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -208,8 +209,11 @@ func TestLoadCatalogEvent(t *testing.T) {
 	if v.Values.Key != "screen" || v.Values.Keys[1] != "cold" {
 		t.Errorf("keys = %q, chosen %q", v.Values.Keys, v.Values.Key)
 	}
-	want := []db.EventTopValuesRow{{Label: "home", Events: 4}, {Label: "<b>settings</b>", Events: 1}}
-	if !reflect.DeepEqual(v.Values.Rows, want) || v.Values.Top != 4 {
+	want := []db.EventTopValuesRow{
+		{Label: "home", Events: 4, WithValue: 4, P50: 25, P95: 38.5},
+		{Label: "<b>settings</b>", Events: 1, WithValue: 1, P50: 100, P95: 100},
+	}
+	if !reflect.DeepEqual(v.Values.Rows, want) || v.Values.Top != 4 || !v.Values.hasValues() {
 		t.Errorf("values = %+v", v.Values)
 	}
 
@@ -240,6 +244,14 @@ func TestLoadCatalogEvent(t *testing.T) {
 	if old.Total.Events != 0 || old.Values.Key != "" || !old.LastSeen.Equal(now.Add(-40*24*time.Hour)) {
 		t.Errorf("old = %+v", old)
 	}
+
+	unvalued, err := d.loadCatalogEvent(ctx, "alpha", "error.sync", "90d", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows := unvalued.Values.Rows; len(rows) != 1 || rows[0].WithValue != 0 || unvalued.Values.hasValues() {
+		t.Errorf("values without a value = %+v", unvalued.Values)
+	}
 }
 
 func TestCatalogPages(t *testing.T) {
@@ -256,6 +268,7 @@ func TestCatalogPages(t *testing.T) {
 		{"/apps/alpha/catalog", http.StatusOK, "/apps/alpha/catalog/app.open"},
 		{"/apps/alpha/catalog?before=garbage", http.StatusOK, "app.open"},
 		{"/apps/alpha/catalog/app.open", http.StatusOK, "&lt;b&gt;settings&lt;/b&gt;"},
+		{"/apps/alpha/catalog/app.open", http.StatusOK, "p50 25 · p95 38.5"},
 		{"/apps/alpha/catalog/app.open?range=90d", http.StatusOK, "old"},
 		{"/apps/alpha/catalog/tap", http.StatusOK, "No events with props in this range."},
 		{"/apps/alpha/catalog/error.sync", http.StatusOK, "No events in this range."},
@@ -308,5 +321,14 @@ func TestCatalogEventFragments(t *testing.T) {
 	body = fragment("event")
 	if !strings.Contains(body, "Events per day") || strings.Contains(body, "<html") {
 		t.Errorf("range change returned the wrong fragment: %.200s", body)
+	}
+}
+
+func TestValueText(t *testing.T) {
+	t.Parallel()
+	for v, want := range map[float64]string{38.5: "38.5", 1840: "1,840", math.Inf(1): "–", math.NaN(): "–"} {
+		if got := valueText(v); got != want {
+			t.Errorf("valueText(%v) = %q, want %q", v, got, want)
+		}
 	}
 }
