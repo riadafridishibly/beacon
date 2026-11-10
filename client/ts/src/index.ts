@@ -100,7 +100,11 @@ export class Client {
 
   private userId = "";
   private sessionId = "";
+  // When the session began, and the whole seconds of it already sent.
   private sessionStartMs = 0;
+  private reported = 0;
+  // Writes of the saved session, in order.
+  private sessionWrites: Promise<void> = Promise.resolve();
   private opened = false;
   private closed = false;
   private closing: Promise<void> | null = null;
@@ -114,7 +118,13 @@ export class Client {
   private inFlight: AbortController | null = null;
 
   /** @internal Use createClient. */
-  constructor(opts: ClientOptions, deviceId: string, queue: Queue, randomId: () => string) {
+  constructor(
+    opts: ClientOptions,
+    deviceId: string,
+    queue: Queue,
+    randomId: () => string,
+    previousSession: string | null,
+  ) {
     this.opts = opts;
     this.logf = safeLog(opts.log);
     this.deviceId = deviceId;
@@ -134,6 +144,7 @@ export class Client {
     this.beatTimer = setInterval(() => this.heartbeat(), opts.heartbeatIntervalMs ?? 60_000);
     unref(this.flushTimer);
     unref(this.beatTimer);
+    if (previousSession !== null) this.endPreviousSession(previousSession);
     this.kick(); // events left by the previous run
   }
 
@@ -172,21 +183,29 @@ export class Client {
     this.enqueue("app.open", Math.floor(Math.max(this.now() - this.startedMs, 0)), { cold: true });
   }
 
-  /** startSession begins a session and heartbeats each minute. It does nothing while one is open. */
+  /**
+   * startSession begins a session and heartbeats each minute. It does nothing
+   * while one is open. A session the app never ends, because it crashed or
+   * was killed, is ended by the next client created on the same store.
+   */
   startSession(): void {
     if (this.sessionId !== "") return;
     this.sessionId = this.randomId();
     this.sessionStartMs = this.now();
-    this.enqueue("session.start");
+    this.reported = 0;
+    this.add(this.event("session.start", this.sessionStartMs));
+    this.saveSession(this.sessionStartMs);
   }
 
   /** endSession sends session.end and closes the session. */
   endSession(): void {
     if (this.sessionId === "") return;
     try {
-      this.enqueue("session.end", this.sessionSeconds());
+      const now = this.now();
+      this.add(this.event("session.end", now, this.report(now)));
     } finally {
       this.sessionId = "";
+      this.writeSession((store) => store.remove("session"));
     }
   }
 
@@ -221,7 +240,7 @@ export class Client {
     clearTimeout(giveUp);
     this.stopped = true;
     if (this.retryTimer !== null) clearTimeout(this.retryTimer);
-    await this.queue.sync();
+    await Promise.all([this.queue.sync(), this.sessionWrites]);
   }
 
   private trackEvent(name: string, value: number | undefined, rawProps: unknown): void {
@@ -233,21 +252,73 @@ export class Client {
   private heartbeat(): void {
     if (this.sessionId === "" || this.closed) return;
     try {
-      this.enqueue("session.heartbeat", this.sessionSeconds());
+      const now = this.now();
+      this.add(this.event("session.heartbeat", now, this.report(now)));
+      this.saveSession(now);
     } catch (err) {
       this.logf(`heartbeat: ${err}`);
     }
   }
 
-  private sessionSeconds(): number {
-    return Math.round((this.now() - this.sessionStartMs) / 1000);
+  // Returns the session's seconds since its last report. Rounding the running
+  // total instead of each report keeps their sum equal to the session's length.
+  private report(nowMs: number): number {
+    const total = Math.round(Math.max(nowMs - this.sessionStartMs, 0) / 1000);
+    const secs = Math.max(total - this.reported, 0);
+    this.reported = Math.max(total, this.reported);
+    return secs;
+  }
+
+  // The saved session lets the next run end it if this one stops without
+  // ending it. ts is the last time it was known to be active, in ms since
+  // the epoch.
+  private saveSession(nowMs: number): void {
+    const saved = JSON.stringify({
+      session_id: this.sessionId,
+      user_id: this.userId || undefined,
+      ts: nowMs,
+    });
+    this.writeSession((store) => store.set("session", saved));
+  }
+
+  private writeSession(op: (store: Store) => Promise<void>): void {
+    this.sessionWrites = this.sessionWrites
+      .then(() => op(this.opts.store))
+      .catch((err) => this.logf(`saved session: ${err}`));
+  }
+
+  // Sends session.end, marked abnormal, for a session the previous run left open.
+  private endPreviousSession(text: string): void {
+    try {
+      const saved = JSON.parse(text) as { session_id?: unknown; user_id?: unknown; ts?: unknown };
+      if (typeof saved.session_id !== "string" || saved.session_id === "") {
+        throw new BeaconError("no session_id");
+      }
+      const now = this.now();
+      // A time that can't be right is left out, and the server uses the time
+      // the event arrives.
+      const ts = saved.ts;
+      const valid = typeof ts === "number" && Number.isInteger(ts) && ts > 0 && ts <= now;
+      this.add({
+        ...this.event("session.end", now, 0, { abnormal: true }),
+        session_id: saved.session_id,
+        user_id: typeof saved.user_id === "string" ? saved.user_id : undefined,
+        ts: valid ? formatTime(ts) : undefined,
+      });
+    } catch (err) {
+      this.logf(`previous session: ${err}`);
+    }
+    this.writeSession((store) => store.remove("session"));
   }
 
   private enqueue(name: string, value?: number, props?: Props): void {
-    if (this.closed) throw new BeaconError("beacon: client closed");
-    const e: WireEvent = {
+    this.add(this.event(name, this.now(), value, props));
+  }
+
+  private event(name: string, nowMs: number, value?: number, props?: Props): WireEvent {
+    return {
       name,
-      ts: formatTime(this.now()),
+      ts: formatTime(nowMs),
       device_id: this.deviceId,
       user_id: this.userId || undefined,
       session_id: this.sessionId || undefined,
@@ -257,8 +328,14 @@ export class Client {
       value,
       props,
     };
-    validate(e);
-    if (this.queue.add(JSON.stringify(e))) this.kick();
+  }
+
+  // Queues e under a new event_id, which it keeps when it is sent again.
+  private add(e: WireEvent): void {
+    if (this.closed) throw new BeaconError("beacon: client closed");
+    const withId: WireEvent = { ...e, event_id: this.randomId() };
+    validate(withId);
+    if (this.queue.add(JSON.stringify(withId))) this.kick();
   }
 
   private kick(): void {
@@ -416,7 +493,13 @@ export async function createClient(opts: ClientOptions): Promise<Client> {
     onDrop: (n) => log(`queue full: dropped ${n} oldest events`),
     onError: log,
   });
-  return new Client(opts, deviceId, queue, randomId);
+  let previousSession: string | null = null;
+  try {
+    previousSession = await opts.store.get("session");
+  } catch (err) {
+    log(`previous session: ${err}`);
+  }
+  return new Client(opts, deviceId, queue, randomId, previousSession);
 }
 
 /** KeyValueStorage is the part of React Native's AsyncStorage the client needs. */

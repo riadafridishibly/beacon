@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -79,7 +80,7 @@ type Config struct {
 // Client queues and sends events. Its methods are safe for concurrent use,
 // but a Props map must not change during the call it is passed to.
 type Client struct {
-	url, key               string
+	url, key, dir          string
 	http                   *http.Client
 	q                      *queue
 	log                    func(string)
@@ -95,10 +96,13 @@ type Client struct {
 
 	opened atomic.Bool
 
-	mu           sync.Mutex
-	userID       string
-	sessionID    string
+	mu        sync.Mutex
+	userID    string
+	sessionID string
+	// sessionStart is when the session began, and reported the whole seconds
+	// of it already sent.
 	sessionStart time.Time
+	reported     float64
 	closed       bool
 
 	closeOnce sync.Once
@@ -128,6 +132,7 @@ func NewClient(cfg *Config) (*Client, error) {
 	c := &Client{
 		url:        strings.TrimRight(cfg.Endpoint, "/") + "/v1/events",
 		key:        cfg.Key,
+		dir:        cfg.Dir,
 		http:       &http.Client{Timeout: requestTimeout},
 		log:        cfg.Log,
 		allowed:    allowed,
@@ -175,6 +180,7 @@ func NewClient(cfg *Config) (*Client, error) {
 		return fail(fmt.Errorf("beacon: open queue: %w", err))
 	}
 
+	c.endPreviousSession()
 	go c.run()
 	c.notify() // events left by the previous run
 	return c, nil
@@ -240,7 +246,9 @@ func (c *Client) AppOpened() error {
 }
 
 // StartSession begins a session and sends session.start, then a heartbeat
-// each minute. It does nothing while a session is open.
+// each minute. It does nothing while a session is open. A session the app
+// never ends, because it crashed or was killed, is ended by the next Client
+// opened on the same Dir.
 func (c *Client) StartSession() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -248,8 +256,13 @@ func (c *Client) StartSession() error {
 		return nil
 	}
 	c.sessionID = c.newID()
-	c.sessionStart = c.now()
-	return c.enqueueLocked("session.start", nil, nil)
+	e := c.eventLocked("session.start", nil, nil)
+	c.sessionStart, c.reported = *e.TS, 0
+	if err := c.addLocked(e); err != nil {
+		return err
+	}
+	c.saveSessionLocked(*e.TS)
+	return nil
 }
 
 // EndSession sends session.end and closes the session.
@@ -259,9 +272,12 @@ func (c *Client) EndSession() error {
 	if c.sessionID == "" {
 		return nil
 	}
-	secs := c.sessionSecondsLocked()
-	err := c.enqueueLocked("session.end", &secs, nil)
+	e := c.eventLocked("session.end", nil, nil)
+	secs := c.reportLocked(*e.TS)
+	e.Value = &secs
+	err := c.addLocked(e)
 	c.sessionID = ""
+	c.removeSession()
 	return err
 }
 
@@ -271,14 +287,90 @@ func (c *Client) heartbeat() {
 	if c.sessionID == "" {
 		return
 	}
-	secs := c.sessionSecondsLocked()
-	if err := c.enqueueLocked("session.heartbeat", &secs, nil); err != nil && !errors.Is(err, ErrClosed) {
-		c.logf("heartbeat: %v", err)
+	e := c.eventLocked("session.heartbeat", nil, nil)
+	secs := c.reportLocked(*e.TS)
+	e.Value = &secs
+	if err := c.addLocked(e); err != nil {
+		if !errors.Is(err, ErrClosed) {
+			c.logf("heartbeat: %v", err)
+		}
+		return
+	}
+	c.saveSessionLocked(*e.TS)
+}
+
+// reportLocked returns the session's seconds since its last report.
+// Rounding the running total instead of each report keeps their sum equal
+// to the session's length.
+func (c *Client) reportLocked(now time.Time) float64 {
+	total := math.Round(max(now.Sub(c.sessionStart), 0).Seconds())
+	secs := max(total-c.reported, 0)
+	c.reported = max(total, c.reported)
+	return secs
+}
+
+// savedSession is the open session on disk, for the next run to end if this
+// one stops without ending it. TS is the last time the session was known to
+// be active, in Unix milliseconds.
+type savedSession struct {
+	SessionID string `json:"session_id"`
+	UserID    string `json:"user_id,omitempty"`
+	TS        int64  `json:"ts"`
+}
+
+func (c *Client) sessionPath() string { return filepath.Join(c.dir, "session") }
+
+func (c *Client) saveSessionLocked(ts time.Time) {
+	b, err := json.Marshal(savedSession{SessionID: c.sessionID, UserID: c.userID, TS: ts.UnixMilli()})
+	if err == nil {
+		err = writeFileAtomic(c.sessionPath(), b)
+	}
+	if err != nil {
+		c.logf("save session: %v", err)
 	}
 }
 
-func (c *Client) sessionSecondsLocked() float64 {
-	return math.Round(c.now().Sub(c.sessionStart).Seconds())
+func (c *Client) removeSession() {
+	if err := os.Remove(c.sessionPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
+		c.logf("remove session: %v", err)
+	}
+}
+
+// endPreviousSession sends session.end, marked abnormal, for a session the
+// previous run left open.
+func (c *Client) endPreviousSession() {
+	b, err := os.ReadFile(c.sessionPath())
+	if errors.Is(err, os.ErrNotExist) {
+		return
+	}
+	defer c.removeSession()
+	var saved savedSession
+	if err == nil {
+		err = json.Unmarshal(b, &saved)
+	}
+	if err == nil && saved.SessionID == "" {
+		err = errors.New("no session_id")
+	}
+	if err != nil {
+		c.logf("previous session: %v", err)
+		return
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e := c.eventLocked("session.end", nil, []byte(`{"abnormal":true}`))
+	secs := 0.0
+	e.SessionID, e.UserID, e.Value = saved.SessionID, saved.UserID, &secs
+	// A time that can't be right is left out, and the server uses the time
+	// the event arrives.
+	if ts := time.UnixMilli(saved.TS).UTC(); saved.TS > 0 && !ts.After(*e.TS) {
+		e.TS = &ts
+	} else {
+		e.TS = nil
+	}
+	if err := c.addLocked(e); err != nil {
+		c.logf("previous session: %v", err)
+	}
 }
 
 // Flush starts sending queued events now, without waiting for them. Call it
@@ -317,14 +409,24 @@ func (c *Client) enqueue(name string, value *float64, props []byte) error {
 }
 
 func (c *Client) enqueueLocked(name string, value *float64, props []byte) error {
-	if c.closed {
-		return ErrClosed
-	}
+	return c.addLocked(c.eventLocked(name, value, props))
+}
+
+func (c *Client) eventLocked(name string, value *float64, props []byte) event {
 	ts := c.now().UTC()
-	e := event{
+	return event{
 		Name: name, TS: &ts, DeviceID: c.deviceID, UserID: c.userID, SessionID: c.sessionID,
 		AppVersion: c.appVersion, Platform: c.platform, OSVersion: c.osVersion, Value: value, Props: props,
 	}
+}
+
+// addLocked queues e under a new event_id, which the event keeps when it is
+// sent again.
+func (c *Client) addLocked(e event) error {
+	if c.closed {
+		return ErrClosed
+	}
+	e.EventID = c.newID()
 	if err := e.validate(); err != nil {
 		return err
 	}

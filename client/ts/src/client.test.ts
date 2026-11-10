@@ -51,14 +51,35 @@ test("sends on the interval", async (t) => {
   assert.equal(names(decode(await srv.wait(1))), "a");
 });
 
-test("retries after a server error", async (t) => {
+test("retries after a server error with the same event ids", async (t) => {
   const srv = await startServer(t);
-  srv.respond = (call) => (call < 3 ? [500, `{"error":"internal error"}`] : null);
+  const tried: string[] = [];
+  srv.respond = (call, body) => {
+    if (call >= 3) return null;
+    for (const e of decode([body])) tried.push(e.event_id ?? "");
+    return [500, `{"error":"internal error"}`];
+  };
   const c = await createClient(await srv.options(t));
   t.after(() => c.close());
   c.track("a");
   c.flush();
-  assert.equal(names(decode(await srv.wait(1))), "a");
+  const events = decode(await srv.wait(1));
+  assert.equal(names(events), "a");
+  const id = events[0]?.event_id;
+  assert.ok(id);
+  assert.deepEqual(tried, [id, id, id]);
+});
+
+test("event ids differ", async (t) => {
+  const srv = await startServer(t);
+  const c = await createClient(await srv.options(t));
+  t.after(() => c.close());
+  c.track("a");
+  c.track("b");
+  c.flush();
+  const [a, b] = decode(await srv.wait(1));
+  assert.ok(a?.event_id);
+  assert.notEqual(a.event_id, b?.event_id);
 });
 
 test("drops a bad event and resends the rest", async (t) => {
@@ -113,8 +134,10 @@ test("the device id persists", async (t) => {
 test("session events", async (t) => {
   const srv = await startServer(t);
   let current = Date.UTC(2026, 10, 8, 12);
+  const store = memoryStore();
   const c = await createClient({
     ...(await srv.options(t)),
+    store,
     heartbeatIntervalMs: 5,
     now: () => (current += 1000),
   });
@@ -134,7 +157,68 @@ test("session events", async (t) => {
   assert.equal(events.at(-1)?.session_id, undefined);
   assert.ok(start?.session_id);
   assert.equal(start.session_id, end?.session_id);
-  assert.ok((end?.value ?? 0) > 0);
+  // Each value covers the time since the previous report, so they add up to
+  // the session's length.
+  let sum = 0;
+  for (const e of events.slice(2, -1)) {
+    assert.ok((e.value ?? 0) > 0, `${e.name} value ${e.value}`);
+    sum += e.value ?? 0;
+  }
+  assert.equal(sum, (Date.parse(end?.ts ?? "") - Date.parse(start.ts ?? "")) / 1000);
+  assert.equal(store.data.has("session"), false);
+});
+
+test("the next client ends an unended session", async (t) => {
+  const srv = await startServer(t);
+  const opts = await srv.options(t);
+  const store = memoryStore();
+  const a = await createClient({ ...opts, store, heartbeatIntervalMs: 5 });
+  t.after(() => a.close());
+  a.setUserId("u");
+  a.startSession();
+  await until(() => store.data.has("session"));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  // A copy of the store is what a crash leaves behind.
+  const left = memoryStore();
+  for (const [k, v] of store.data) left.data.set(k, v);
+  const saved = JSON.parse(left.data.get("session") ?? "") as { session_id: string; ts: number };
+  const b = await createClient({ ...opts, store: left });
+  await b.close();
+
+  const ends = decode(srv.bodies).filter((e) => e.name === "session.end");
+  assert.equal(ends.length, 1);
+  assert.deepEqual(
+    { ...ends[0], event_id: undefined },
+    {
+      name: "session.end",
+      event_id: undefined,
+      ts: new Date(saved.ts).toISOString().replace(".000Z", "Z"),
+      device_id: a.deviceId,
+      user_id: "u",
+      session_id: saved.session_id,
+      platform: opts.platform,
+      value: 0,
+      props: { abnormal: true },
+    },
+  );
+  assert.equal(left.data.has("session"), false);
+});
+
+test("a bad saved session is discarded", async (t) => {
+  const srv = await startServer(t);
+  const store = memoryStore();
+  store.data.set("session", "{");
+  const logs: string[] = [];
+  const c = await createClient({ ...(await srv.options(t)), store, log: (m) => logs.push(m) });
+  c.track("a");
+  await c.close();
+  assert.equal(names(decode(await srv.wait(1))), "a");
+  assert.ok(
+    logs.some((m) => m.includes("previous session")),
+    logs.join("\n"),
+  );
+  assert.equal(store.data.has("session"), false);
 });
 
 test("appOpened records once", async (t) => {

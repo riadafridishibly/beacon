@@ -316,8 +316,11 @@ func (s *session) run(d device, user *string, date time.Time, version string) {
 
 	length := min(max(logNormal(rng, 300, 0.9), 20), 3600)
 	seconds := func(v float64) time.Duration { return time.Duration(v * float64(time.Second)) }
+	// Heartbeat and end values are seconds since the previous report.
+	last := 0.0
 	for t := float64(heartbeatEvery); t < length; t += heartbeatEvery {
-		add("session.heartbeat", seconds(t), num(t), nil)
+		add("session.heartbeat", seconds(t), num(t-last), nil)
+		last = t
 	}
 	during := func() time.Duration { return seconds(length * rng.Float64()) }
 
@@ -345,9 +348,13 @@ func (s *session) run(d device, user *string, date time.Time, version string) {
 		add("error.render", during(), nil, map[string]any{"message": "cannot read layout of an empty view", "stack": "render@view:88\ndraw@screen:12"})
 	}
 
-	// Some sessions never send an end, such as when the app is killed.
-	if rng.Float64() < 0.88 {
-		add("session.end", seconds(length), num(math.Round(length)), nil)
+	// A killed app ends its session on the next start, at its last heartbeat.
+	// Some never start again.
+	switch r := rng.Float64(); {
+	case r < 0.88:
+		add("session.end", seconds(length), num(math.Round(length-last)), nil)
+	case r < 0.97:
+		add("session.end", seconds(last), num(0), map[string]any{"abnormal": true})
 	}
 }
 

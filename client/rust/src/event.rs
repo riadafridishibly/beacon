@@ -25,6 +25,8 @@ pub type Props = serde_json::Map<String, serde_json::Value>;
 #[cfg_attr(test, derive(serde::Deserialize), serde(default))]
 pub(crate) struct Event {
     pub name: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub event_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ts: Option<String>,
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -59,9 +61,12 @@ impl Event {
         if self.device_id.is_empty() {
             return invalid("device_id is required".into());
         }
-        if self.device_id.len() > MAX_ID_LEN || self.session_id.len() > MAX_ID_LEN {
+        if [&self.device_id, &self.session_id, &self.event_id]
+            .iter()
+            .any(|s| s.len() > MAX_ID_LEN)
+        {
             return invalid(format!(
-                "device_id and session_id must be at most {MAX_ID_LEN} bytes"
+                "device_id, session_id and event_id must be at most {MAX_ID_LEN} bytes"
             ));
         }
         if self.user_id.len() > MAX_USER_LEN {
@@ -82,12 +87,13 @@ impl Event {
             &self.app_version,
             &self.platform,
             &self.os_version,
+            &self.event_id,
         ]
         .iter()
         .any(|s| s.contains('\0'))
         {
             return invalid(
-                "device_id, user_id, session_id, app_version, platform and os_version must not contain NUL".into(),
+                "device_id, user_id, session_id, app_version, platform, os_version and event_id must not contain NUL".into(),
             );
         }
         // serde_json writes a non-finite number as null.

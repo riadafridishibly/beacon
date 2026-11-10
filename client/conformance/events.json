@@ -11,6 +11,7 @@
     "name": "all fields",
     "event": {
       "name": "app.open",
+      "event_id": "e",
       "ts": "2026-11-08T11:59:00Z",
       "device_id": "d",
       "user_id": "u",
@@ -173,6 +174,24 @@
     "valid": false
   },
   {
+    "name": "event_id at limit",
+    "event": {
+      "device_id": "d",
+      "name": "x",
+      "event_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "valid": true
+  },
+  {
+    "name": "event_id over limit",
+    "event": {
+      "device_id": "d",
+      "name": "x",
+      "event_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "valid": false
+  },
+  {
     "name": "user_id at limit",
     "event": {
       "device_id": "d",
@@ -314,6 +333,15 @@
       "device_id": "d",
       "name": "x",
       "session_id": "a\u0000b"
+    },
+    "valid": false
+  },
+  {
+    "name": "NUL in event_id",
+    "event": {
+      "device_id": "d",
+      "name": "x",
+      "event_id": "a\u0000b"
     },
     "valid": false
   },

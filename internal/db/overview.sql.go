@@ -216,14 +216,14 @@ func (q *Queries) OverviewTotals(ctx context.Context, arg OverviewTotalsParams) 
 
 const overviewUsage = `-- name: OverviewUsage :many
 WITH sessions AS (
-    SELECT (min(ts) AT TIME ZONE 'UTC')::date AS day, max(value) AS seconds
+    SELECT (min(ts) AT TIME ZONE 'UTC')::date AS day, sum(value) AS seconds
     FROM events
     WHERE app_id = $1 AND ts >= $2 AND ts < $3
       AND name IN ('session.start', 'session.heartbeat', 'session.end')
       AND session_id IS NOT NULL
       AND (value IS NULL OR value >= 0)
     GROUP BY device_id, session_id
-    HAVING max(value) IS NOT NULL
+    HAVING count(value) > 0
 )
 SELECT day, sum(seconds)::double precision AS seconds
 FROM sessions
@@ -242,9 +242,9 @@ type OverviewUsageRow struct {
 	Seconds float64
 }
 
-// A session's length is the largest heartbeat or end value it sent, so a
-// session that never sent session.end still counts. It belongs to the day of
-// its first event.
+// Heartbeat and end values are seconds since the session's previous report,
+// so a session's length is their sum, and a session that never sent
+// session.end still counts. It belongs to the day of its first event.
 func (q *Queries) OverviewUsage(ctx context.Context, arg OverviewUsageParams) ([]OverviewUsageRow, error) {
 	rows, err := q.db.Query(ctx, overviewUsage, arg.AppID, arg.Since, arg.Until)
 	if err != nil {
