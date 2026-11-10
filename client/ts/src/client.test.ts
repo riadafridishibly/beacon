@@ -172,12 +172,11 @@ test("the next client ends an unended session", async (t) => {
   const srv = await startServer(t);
   const opts = await srv.options(t);
   const store = memoryStore();
-  const a = await createClient({ ...opts, store, heartbeatIntervalMs: 5 });
+  const a = await createClient({ ...opts, store });
   t.after(() => a.close());
-  a.setUserId("u");
   a.startSession();
-  await until(() => store.data.has("session"));
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  a.setUserId("u");
+  await until(() => store.data.get("session")?.includes('"user_id":"u"') ?? false);
 
   // A copy of the store is what a crash leaves behind.
   const left = memoryStore();

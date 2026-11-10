@@ -187,19 +187,19 @@ struct State {
 }
 
 impl State {
-    /// Returns the open session's seconds since its last report. Rounding
-    /// the running total instead of each report keeps their sum equal to the
+    /// Returns the open session's seconds since its last report, and the
+    /// running total to record once that report is queued. Rounding the
+    /// running total instead of each report keeps their sum equal to the
     /// session's length.
-    fn report(&mut self, now: SystemTime) -> Option<f64> {
-        let session = self.session.as_mut()?;
+    fn unreported(&self, now: SystemTime) -> Option<(f64, f64)> {
+        let session = self.session.as_ref()?;
         let total = now
             .duration_since(session.start)
             .unwrap_or_default()
             .as_secs_f64()
-            .round();
-        let seconds = (total - session.reported).max(0.0);
-        session.reported = total.max(session.reported);
-        Some(seconds)
+            .round()
+            .max(session.reported);
+        Some((total - session.reported, total))
     }
 }
 
@@ -348,7 +348,11 @@ impl Client {
     /// set_user_id sets the user_id of later events, "" for none. Only tester
     /// builds should call it.
     pub fn set_user_id(&self, id: &str) {
-        lock(&self.inner.state).user_id = id.to_string();
+        let mut state = lock(&self.inner.state);
+        state.user_id = id.to_string();
+        if !state.closed {
+            self.inner.save_session(&state, (self.inner.tuning.now)());
+        }
     }
 
     /// track queues an event. Report errors with track_error: the dashboard
@@ -520,7 +524,7 @@ impl Inner {
     fn end_session(&self) -> Result<(), Error> {
         let mut state = lock(&self.state);
         let now = (self.tuning.now)();
-        let Some(seconds) = state.report(now) else {
+        let Some((seconds, _)) = state.unreported(now) else {
             return Ok(());
         };
         let event = self.event(&state, "session.end", now, Some(seconds), None);
@@ -533,12 +537,17 @@ impl Inner {
     fn heartbeat(&self) {
         let mut state = lock(&self.state);
         let now = (self.tuning.now)();
-        let Some(seconds) = state.report(now) else {
+        let Some((seconds, total)) = state.unreported(now) else {
             return;
         };
         let event = self.event(&state, "session.heartbeat", now, Some(seconds), None);
         match self.add(&state, event) {
-            Ok(()) => self.save_session(&state, now),
+            Ok(()) => {
+                if let Some(session) = &mut state.session {
+                    session.reported = total;
+                }
+                self.save_session(&state, now);
+            }
             Err(Error::Closed) => {}
             Err(e) => self.log.log(&format!("heartbeat: {e}")),
         }

@@ -516,16 +516,9 @@ fn seconds_from_ts(ts: &Value) -> u64 {
 fn next_client_ends_unended_session() {
     let fake = Fake::new();
     let (cfg, _dir) = config(&fake);
-    let a = start(
-        &cfg,
-        Tuning {
-            heartbeat_every: Duration::from_millis(5),
-            ..tuning()
-        },
-    );
-    a.set_user_id("u");
+    let a = start(&cfg, tuning());
     a.start_session().unwrap();
-    thread::sleep(Duration::from_millis(20));
+    a.set_user_id("u");
     // Dropping stops the client the way a crash would, without ending its
     // session.
     let device_id = a.device_id().to_string();

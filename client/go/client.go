@@ -100,7 +100,8 @@ type Client struct {
 	userID    string
 	sessionID string
 	// sessionStart is when the session began, and reported the whole seconds
-	// of it already sent.
+	// of it already sent. sessionStart keeps its monotonic clock reading, so
+	// changing the system clock doesn't change the session's length.
 	sessionStart time.Time
 	reported     float64
 	closed       bool
@@ -195,6 +196,9 @@ func (c *Client) SetUserID(id string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.userID = id
+	if c.sessionID != "" {
+		c.saveSessionLocked(c.now())
+	}
 }
 
 // Track queues an event. props may be nil. Report errors with TrackError: the
@@ -256,12 +260,12 @@ func (c *Client) StartSession() error {
 		return nil
 	}
 	c.sessionID = c.newID()
-	e := c.eventLocked("session.start", nil, nil)
-	c.sessionStart, c.reported = *e.TS, 0
-	if err := c.addLocked(e); err != nil {
+	now := c.now()
+	c.sessionStart, c.reported = now, 0
+	if err := c.addLocked(c.eventLocked("session.start", now, nil, nil)); err != nil {
 		return err
 	}
-	c.saveSessionLocked(*e.TS)
+	c.saveSessionLocked(now)
 	return nil
 }
 
@@ -272,10 +276,9 @@ func (c *Client) EndSession() error {
 	if c.sessionID == "" {
 		return nil
 	}
-	e := c.eventLocked("session.end", nil, nil)
-	secs := c.reportLocked(*e.TS)
-	e.Value = &secs
-	err := c.addLocked(e)
+	now := c.now()
+	secs, _ := c.unreportedLocked(now)
+	err := c.addLocked(c.eventLocked("session.end", now, &secs, nil))
 	c.sessionID = ""
 	c.removeSession()
 	return err
@@ -287,26 +290,25 @@ func (c *Client) heartbeat() {
 	if c.sessionID == "" {
 		return
 	}
-	e := c.eventLocked("session.heartbeat", nil, nil)
-	secs := c.reportLocked(*e.TS)
-	e.Value = &secs
-	if err := c.addLocked(e); err != nil {
+	now := c.now()
+	secs, total := c.unreportedLocked(now)
+	if err := c.addLocked(c.eventLocked("session.heartbeat", now, &secs, nil)); err != nil {
 		if !errors.Is(err, ErrClosed) {
 			c.logf("heartbeat: %v", err)
 		}
 		return
 	}
-	c.saveSessionLocked(*e.TS)
+	c.reported = total
+	c.saveSessionLocked(now)
 }
 
-// reportLocked returns the session's seconds since its last report.
-// Rounding the running total instead of each report keeps their sum equal
-// to the session's length.
-func (c *Client) reportLocked(now time.Time) float64 {
-	total := math.Round(max(now.Sub(c.sessionStart), 0).Seconds())
-	secs := max(total-c.reported, 0)
-	c.reported = max(total, c.reported)
-	return secs
+// unreportedLocked returns the session's seconds since its last report, and
+// the running total to record once that report is queued. Rounding the
+// running total instead of each report keeps their sum equal to the
+// session's length.
+func (c *Client) unreportedLocked(now time.Time) (secs, total float64) {
+	total = max(math.Round(max(now.Sub(c.sessionStart), 0).Seconds()), c.reported)
+	return total - c.reported, total
 }
 
 // savedSession is the open session on disk, for the next run to end if this
@@ -358,9 +360,9 @@ func (c *Client) endPreviousSession() {
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	e := c.eventLocked("session.end", nil, []byte(`{"abnormal":true}`))
 	secs := 0.0
-	e.SessionID, e.UserID, e.Value = saved.SessionID, saved.UserID, &secs
+	e := c.eventLocked("session.end", c.now(), &secs, []byte(`{"abnormal":true}`))
+	e.SessionID, e.UserID = saved.SessionID, saved.UserID
 	// A time that can't be right is left out, and the server uses the time
 	// the event arrives.
 	if ts := time.UnixMilli(saved.TS).UTC(); saved.TS > 0 && !ts.After(*e.TS) {
@@ -409,11 +411,11 @@ func (c *Client) enqueue(name string, value *float64, props []byte) error {
 }
 
 func (c *Client) enqueueLocked(name string, value *float64, props []byte) error {
-	return c.addLocked(c.eventLocked(name, value, props))
+	return c.addLocked(c.eventLocked(name, c.now(), value, props))
 }
 
-func (c *Client) eventLocked(name string, value *float64, props []byte) event {
-	ts := c.now().UTC()
+func (c *Client) eventLocked(name string, now time.Time, value *float64, props []byte) event {
+	ts := now.UTC()
 	return event{
 		Name: name, TS: &ts, DeviceID: c.deviceID, UserID: c.userID, SessionID: c.sessionID,
 		AppVersion: c.appVersion, Platform: c.platform, OSVersion: c.osVersion, Value: value, Props: props,

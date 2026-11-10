@@ -151,6 +151,7 @@ export class Client {
   /** setUserId sets the user_id of later events, "" for none. Only tester builds should call it. */
   setUserId(id: string): void {
     this.userId = id;
+    if (this.sessionId !== "" && !this.closed) this.saveSession(this.now());
   }
 
   /**
@@ -202,7 +203,7 @@ export class Client {
     if (this.sessionId === "") return;
     try {
       const now = this.now();
-      this.add(this.event("session.end", now, this.report(now)));
+      this.add(this.event("session.end", now, this.unreported(now).secs));
     } finally {
       this.sessionId = "";
       this.writeSession((store) => store.remove("session"));
@@ -253,20 +254,24 @@ export class Client {
     if (this.sessionId === "" || this.closed) return;
     try {
       const now = this.now();
-      this.add(this.event("session.heartbeat", now, this.report(now)));
+      const { secs, total } = this.unreported(now);
+      this.add(this.event("session.heartbeat", now, secs));
+      this.reported = total;
       this.saveSession(now);
     } catch (err) {
       this.logf(`heartbeat: ${err}`);
     }
   }
 
-  // Returns the session's seconds since its last report. Rounding the running
-  // total instead of each report keeps their sum equal to the session's length.
-  private report(nowMs: number): number {
-    const total = Math.round(Math.max(nowMs - this.sessionStartMs, 0) / 1000);
-    const secs = Math.max(total - this.reported, 0);
-    this.reported = Math.max(total, this.reported);
-    return secs;
+  // Returns the session's seconds since its last report, and the running total
+  // to record once that report is queued. Rounding the running total instead
+  // of each report keeps their sum equal to the session's length.
+  private unreported(nowMs: number): { secs: number; total: number } {
+    const total = Math.max(
+      Math.round(Math.max(nowMs - this.sessionStartMs, 0) / 1000),
+      this.reported,
+    );
+    return { secs: total - this.reported, total };
   }
 
   // The saved session lets the next run end it if this one stops without

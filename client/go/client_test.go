@@ -377,11 +377,9 @@ func TestNextClientEndsUnendedSession(t *testing.T) {
 	t.Parallel()
 	srv := newServer(t)
 	cfg := srv.config(t)
-	cfg.heartbeatEvery = 5 * time.Millisecond
 	a := newClient(t, cfg)
-	a.SetUserID("u")
 	must(t, a.StartSession())
-	time.Sleep(20 * time.Millisecond)
+	a.SetUserID("u")
 	kill(a)
 
 	b, err := os.ReadFile(filepath.Join(cfg.Dir, "session"))

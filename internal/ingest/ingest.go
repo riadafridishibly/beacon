@@ -65,8 +65,7 @@ type Fields struct {
 
 // Event is one thing that happened. Value is its single numeric measure,
 // such as a duration in milliseconds. Props holds everything else, as a
-// JSON object. EventID stays the same when a client retries the event. It is
-// checked but not stored.
+// JSON object. EventID stays the same when a client retries the event.
 type Event struct {
 	Fields
 	Name    string          `json:"name"`
