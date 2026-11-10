@@ -84,28 +84,27 @@ templ viewFormPage(nav *web.Nav, app db.App, f viewForm) {
 					}
 				</datalist>
 			}
-			<fieldset
-				class="space-y-1.5"
-				if f.MeasureError != "" {
-					aria-describedby="measure-error"
-				}
-			>
+			<fieldset class="space-y-1.5">
 				<legend class="mb-1.5 text-sm font-medium">Measures</legend>
 				<div class="flex flex-wrap gap-x-5 gap-y-2">
-					for _, id := range measureIDs {
+					for _, m := range measures {
 						<label class="flex items-center gap-2 text-sm">
 							<input
 								type="checkbox"
 								name="measure"
-								value={ id }
-								checked?={ slices.Contains(f.Measures, id) }
+								value={ m.ID }
+								checked?={ slices.Contains(f.Measures, m.ID) }
+								if f.MeasureError != "" {
+									aria-invalid="true"
+									aria-describedby="measure-error"
+								}
 								class="checkbox checkbox-sm"
 							/>
-							{ describeMeasures([]string{ id }) }
+							{ describeMeasures([]string{ m.ID }) }
 						</label>
 					}
 				</div>
-				<p class="text-sm opacity-60">Events and devices can share a chart, and so can p50 and p95. The sum goes alone. A table sorts by the first one listed.</p>
+				<p class="text-sm opacity-60">Events and devices can share a chart, and so can p50 and p95. The sum goes alone. A table sorts by the last one listed.</p>
 				if f.MeasureError != "" {
 					<p id="measure-error" class="text-sm text-error">{ f.MeasureError }</p>
 				}
@@ -195,7 +194,7 @@ templ viewTable(g *viewGroups) {
 						@viewHeader("Devices", g.sortedBy("distinct_devices"))
 					}
 					if g.shows("sum") {
-						@viewHeader("Sum", true)
+						@viewHeader("Sum", g.sortedBy("sum"))
 					}
 					if g.Values {
 						@viewHeader("p50", g.sortedBy("p50"))

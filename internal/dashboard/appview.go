@@ -37,59 +37,68 @@ const (
 
 type option struct{ ID, Label string }
 
-// measureIDs are the measures a view can show, in the order a view lists them.
-var measureIDs = []string{"count", "distinct_devices", "sum", "p50", "p95"}
-
-var measureNames = map[string]string{
-	"count":            "Events",
-	"distinct_devices": "Devices",
-	"sum":              "Sum",
-	"p50":              "p50",
-	"p95":              "p95",
+// measure is something a view can show. A view shows measures of one
+// family together, since they share a unit and an axis.
+type measure struct {
+	ID, Name, Family string
+	// OfValue marks a measure computed from the events' values.
+	OfValue bool
 }
 
-// measureFamilies are the measures a view can show together, since they
-// share a unit and an axis. The sum grows with traffic, so it stays alone.
-var measureFamilies = [][]string{{"count", "distinct_devices"}, {"p50", "p95"}, {"sum"}}
+// measures are in the order a view lists them. The sum grows with traffic,
+// so it has a family of its own.
+var measures = []measure{
+	{ID: "count", Name: "Events", Family: "counts"},
+	{ID: "distinct_devices", Name: "Devices", Family: "counts"},
+	{ID: "sum", Name: "Sum", Family: "sum", OfValue: true},
+	{ID: "p50", Name: "p50", Family: "percentiles", OfValue: true},
+	{ID: "p95", Name: "p95", Family: "percentiles", OfValue: true},
+}
 
-// ofValue reports whether a measure is computed from the events' values.
-func ofValue(id string) bool { return id == "sum" || id == "p50" || id == "p95" }
+func measureByID(id string) measure {
+	i := slices.IndexFunc(measures, func(m measure) bool { return m.ID == id })
+	if i < 0 {
+		return measure{ID: id, Name: id}
+	}
+	return measures[i]
+}
 
 // describeMeasures names measures from one family, such as "p50 and p95 of
 // value".
 func describeMeasures(ids []string) string {
 	names := make([]string, len(ids))
 	for i, id := range ids {
-		names[i] = cmp.Or(measureNames[id], id)
+		names[i] = measureByID(id).Name
 		if i > 0 {
 			names[i] = strings.ToLower(names[i])
 		}
 	}
 	s := strings.Join(names, " and ")
-	if len(ids) > 0 && ofValue(ids[0]) {
+	if len(ids) > 0 && measureByID(ids[0]).OfValue {
 		s += " of value"
 	}
 	return s
 }
 
-// parseMeasures checks the measures picked in the form and returns them in
-// the order of measureIDs.
+// parseMeasures checks the measures picked in the form and returns the known
+// ones in the order of measures, so the form keeps them on an error.
 func parseMeasures(picked []string) ([]string, string) {
-	if len(picked) == 0 || slices.ContainsFunc(picked, func(id string) bool { return !slices.Contains(measureIDs, id) }) {
-		return nil, "Choose a measure."
-	}
 	var ids []string
-	for _, id := range measureIDs {
-		if slices.Contains(picked, id) {
-			ids = append(ids, id)
+	families := map[string]bool{}
+	for _, m := range measures {
+		if slices.Contains(picked, m.ID) {
+			ids = append(ids, m.ID)
+			families[m.Family] = true
 		}
 	}
-	for _, family := range measureFamilies {
-		if slices.Contains(family, ids[0]) && !slices.ContainsFunc(ids, func(id string) bool { return !slices.Contains(family, id) }) {
-			return ids, ""
-		}
+	unknown := slices.ContainsFunc(picked, func(id string) bool { return !slices.Contains(ids, id) })
+	switch {
+	case len(ids) == 0 || unknown:
+		return ids, "Choose a measure."
+	case len(families) > 1:
+		return ids, "Combine events with devices, or p50 with p95. The sum goes alone."
 	}
-	return ids, "Combine events with devices, or p50 with p95. The sum goes alone."
+	return ids, ""
 }
 
 var shapes = []option{
@@ -267,7 +276,8 @@ type viewCard struct {
 	Failed  bool
 }
 
-// viewGroups is a grouped table, sorted by the first of Measures.
+// viewGroups is a grouped table, sorted by the last of Measures: devices
+// over events, and the tail over the median.
 type viewGroups struct {
 	Field    string
 	Measures []string
@@ -277,7 +287,7 @@ type viewGroups struct {
 
 func (g *viewGroups) shows(id string) bool { return slices.Contains(g.Measures, id) }
 
-func (g *viewGroups) sortedBy(id string) bool { return g.Measures[0] == id }
+func (g *viewGroups) sortedBy(id string) bool { return g.Measures[len(g.Measures)-1] == id }
 
 // loadViewCards gives a view that fails its own error card, so one view
 // can't break the overview. A timeout still fails the page.
@@ -349,17 +359,20 @@ func viewChart(v db.AppView, days []time.Time, rows []db.ViewDailyRow) chartView
 	for _, r := range rows {
 		byDay[dayKey(r.Day.Time)] = r
 	}
+	perDay := make([]db.ViewDailyRow, len(days))
+	for i, day := range days {
+		perDay[i] = byDay[dayKey(day)]
+	}
 	lines := make([]series, len(v.Measures))
-	for i, m := range v.Measures {
+	for i, id := range v.Measures {
 		values := make([]*float64, len(days))
-		for j, day := range days {
-			r := byDay[dayKey(day)]
-			values[j] = measureValue(m, r.Events, r.Devices, r.WithValue, r.Total, r.P50, r.P95)
+		for j, r := range perDay {
+			values[j] = measureValue(id, r.Events, r.Devices, r.WithValue, r.Total, r.P50, r.P95)
 		}
-		lines[i] = withValues(slots[i], measureNames[m], values)
+		lines[i] = withValues(slots[i], measureByID(id).Name, values)
 	}
 	kind := columnChart
-	if len(lines) > 1 || v.Measures[0] == "p50" || v.Measures[0] == "p95" {
+	if len(lines) > 1 || measureByID(v.Measures[0]).Family == "percentiles" {
 		kind = lineChart
 	}
 	return layout(viewChartData(v, days, kind, lines))
@@ -377,7 +390,7 @@ func viewChartData(v db.AppView, days []time.Time, kind chartKind, s []series) c
 		Format: countFormat,
 		Series: s,
 	}
-	if ofValue(v.Measures[0]) {
+	if measureByID(v.Measures[0]).OfValue {
 		c.Format, c.PlotZeros = numberFormat, true
 		c.Empty = "No matching " + v.Event + " events with a value in this range."
 	}
@@ -436,11 +449,12 @@ func seriesName(label string, other bool) (name, full string, placeholder bool) 
 	return string([]rune(label)[:maxSeriesName-1]) + "…", label, false
 }
 
-// groupsFor orders the groups by the view's first measure. Ties keep the
+// groupsFor orders the groups by the view's last measure. Ties keep the
 // query's order, by count.
 func groupsFor(v db.AppView, rows []db.ViewGroupsRow) *viewGroups {
+	sortBy := v.Measures[len(v.Measures)-1]
 	key := func(r db.ViewGroupsRow) float64 {
-		if p := measureValue(v.Measures[0], r.Events, r.Devices, r.WithValue, r.Total, r.P50, r.P95); p != nil {
+		if p := measureValue(sortBy, r.Events, r.Devices, r.WithValue, r.Total, r.P50, r.P95); p != nil {
 			return *p
 		}
 		return math.Inf(-1)

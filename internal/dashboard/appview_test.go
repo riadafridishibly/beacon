@@ -71,9 +71,17 @@ func TestParseMeasures(t *testing.T) {
 			t.Errorf("parseMeasures(%q) = %v, %q", in, got, msg)
 		}
 	}
-	for _, in := range []string{"", "mean", "count p95", "sum p50", "count sum"} {
-		if _, msg := parseMeasures(strings.Fields(in)); msg == "" {
-			t.Errorf("parseMeasures(%q) accepted", in)
+	for in, kept := range map[string]string{
+		"":           "[]",
+		"mean":       "[]",
+		"count mean": "[count]",
+		"count p95":  "[count p95]",
+		"sum p50":    "[sum p50]",
+		"count sum":  "[count sum]",
+	} {
+		got, msg := parseMeasures(strings.Fields(in))
+		if msg == "" || fmt.Sprint(got) != kept {
+			t.Errorf("parseMeasures(%q) = %v, %q; want an error keeping %s", in, got, msg, kept)
 		}
 	}
 	for in, want := range map[string]string{
@@ -85,6 +93,18 @@ func TestParseMeasures(t *testing.T) {
 		if got := describeMeasures(strings.Fields(in)); got != want {
 			t.Errorf("describeMeasures(%q) = %q", in, got)
 		}
+	}
+}
+
+func TestGroupsSortByLastMeasure(t *testing.T) {
+	t.Parallel()
+	rows := []db.ViewGroupsRow{
+		{Label: "steady", Events: 2, WithValue: 2, P50: 50, P95: 60},
+		{Label: "spiky", Events: 1, WithValue: 1, P50: 10, P95: 900},
+	}
+	g := groupsFor(db.AppView{GroupBy: "props.server", Measures: []string{"p50", "p95"}}, rows)
+	if g.Rows[0].Label != "spiky" || !g.sortedBy("p95") || g.sortedBy("p50") {
+		t.Errorf("sorted %v by p95: %v", g.Rows, g.sortedBy("p95"))
 	}
 }
 
@@ -225,7 +245,7 @@ func TestOverviewViews(t *testing.T) {
 	if want := []group{{"fra", 3, 2}, {"ams", 2, 2}, {"", 1, 1}}; fmt.Sprint(groups) != fmt.Sprint(want) {
 		t.Errorf("reach = %v, want %v", groups, want)
 	}
-	if !reach.sortedBy("count") || !reach.shows("distinct_devices") || reach.shows("sum") {
+	if !reach.sortedBy("distinct_devices") || !reach.shows("distinct_devices") || reach.shows("sum") {
 		t.Errorf("reach measures = %v", reach.Measures)
 	}
 }
@@ -302,7 +322,9 @@ func TestViewEditor(t *testing.T) {
 	}
 	form.Del("shape")
 	form["measure"] = []string{"count", "p95"}
-	if w := c.do(http.MethodPost, path, form); w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "Combine events with devices") {
+	w = c.do(http.MethodPost, path, form)
+	if body := w.Body.String(); w.Code != http.StatusUnprocessableEntity || !strings.Contains(body, "Combine events with devices") ||
+		!strings.Contains(body, `value="p95" checked aria-invalid="true"`) {
 		t.Errorf("measures without a unit: %d", w.Code)
 	}
 	form["measure"] = []string{"distinct_devices", "count"}
