@@ -31,6 +31,17 @@ type AppKey struct {
 	RevokedAt *time.Time
 }
 
+type AppView struct {
+	ID        int64
+	AppID     string
+	Title     string
+	Event     string
+	Agg       string
+	GroupBy   string
+	Filter    []byte
+	CreatedAt time.Time
+}
+
 type Event struct {
 	ID         int64
 	AppID      string

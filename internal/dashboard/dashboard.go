@@ -1,6 +1,6 @@
 // Package dashboard serves the web UI: sign-in, the app list, creating apps,
-// and each app's overview, events, users, devices, event catalog and ingest
-// keys.
+// and each app's overview, events, users, devices, event catalog, views and
+// ingest keys.
 package dashboard
 
 import (
@@ -69,8 +69,14 @@ func New(pool *pgxpool.Pool, cfg Config) (http.Handler, error) {
 	pages.Handle("GET /apps/{id}/catalog", web.Handle(d.catalog))
 	pages.Handle("GET /apps/{id}/catalog/{name}", web.Handle(d.catalogEvent))
 	pages.Handle("GET /apps/{id}/keys", web.Handle(d.keys))
+	pages.Handle("GET /apps/{id}/views", web.Handle(d.viewList))
+	pages.Handle("GET /apps/{id}/views/new", web.Handle(d.newView))
+	pages.Handle("GET /apps/{id}/views/{view}", web.Handle(d.editView))
 	pages.Handle("POST /apps", web.Handle(d.createApp))
 	pages.Handle("POST /keys/{prefix}/revoke", web.Handle(d.revokeKey))
+	pages.Handle("POST /apps/{id}/views", web.Handle(d.saveView))
+	pages.Handle("POST /apps/{id}/views/{view}", web.Handle(d.saveView))
+	pages.Handle("POST /apps/{id}/views/{view}/delete", web.Handle(d.deleteView))
 	pages.Handle("/", web.Handle(func(http.ResponseWriter, *http.Request) error { return web.ErrNotFound }))
 
 	mux := http.NewServeMux()

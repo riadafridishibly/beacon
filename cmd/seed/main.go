@@ -83,7 +83,28 @@ func seed(ctx context.Context, pool *pgxpool.Pool, now time.Time) (int64, error)
 	if err := rotateKey(ctx, q); err != nil {
 		return 0, err
 	}
+	if err := addViews(ctx, q); err != nil {
+		return 0, err
+	}
 	return q.InsertEvents(ctx, generate(now, rand.New(rand.NewPCG(1, 2))))
+}
+
+// addViews adds one view of each kind the overview draws.
+func addViews(ctx context.Context, q *db.Queries) error {
+	for _, v := range []db.CreateViewParams{
+		{Title: "Export time by format", Event: "export.finished", Agg: "p95", GroupBy: "props.format"},
+		{Title: "Screen views", Event: "screen.view", Agg: "count", GroupBy: "props.screen"},
+		{Title: "PDF exports per day", Event: "export.finished", Agg: "count", Filter: []byte(`{"props.format": "pdf"}`)},
+	} {
+		v.AppID, v.MaxViews = appID, 100
+		if v.Filter == nil {
+			v.Filter = []byte("{}")
+		}
+		if _, err := q.CreateView(ctx, v); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // rotateKey revokes the demo app's key and adds a new one, so the keys page
