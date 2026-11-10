@@ -18,6 +18,7 @@ export type Props = Record<string, unknown>;
 /** WireEvent is one event as the server receives it. */
 export interface WireEvent {
   name: string;
+  event_id?: string;
   ts?: string;
   device_id?: string;
   user_id?: string;
@@ -57,8 +58,10 @@ export function validate(e: WireEvent): void {
     );
   }
   if (!e.device_id) throw new BeaconError("beacon: device_id is required");
-  if (over(e.device_id, maxIdLen) || over(e.session_id, maxIdLen)) {
-    throw new BeaconError(`beacon: device_id and session_id must be at most ${maxIdLen} bytes`);
+  if (over(e.device_id, maxIdLen) || over(e.session_id, maxIdLen) || over(e.event_id, maxIdLen)) {
+    throw new BeaconError(
+      `beacon: device_id, session_id and event_id must be at most ${maxIdLen} bytes`,
+    );
   }
   if (over(e.user_id, maxUserLen)) {
     throw new BeaconError(`beacon: user_id must be at most ${maxUserLen} bytes`);
@@ -73,10 +76,18 @@ export function validate(e: WireEvent): void {
     );
   }
   if (
-    [e.device_id, e.user_id, e.session_id, e.app_version, e.platform, e.os_version].some(hasNul)
+    [
+      e.device_id,
+      e.user_id,
+      e.session_id,
+      e.app_version,
+      e.platform,
+      e.os_version,
+      e.event_id,
+    ].some(hasNul)
   ) {
     throw new BeaconError(
-      "beacon: device_id, user_id, session_id, app_version, platform and os_version must not contain NUL",
+      "beacon: device_id, user_id, session_id, app_version, platform, os_version and event_id must not contain NUL",
     );
   }
   if (e.value !== undefined && !Number.isFinite(e.value)) {

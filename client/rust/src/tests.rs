@@ -198,15 +198,45 @@ fn sends_on_interval() {
 }
 
 #[test]
-fn retries_after_server_error() {
+fn retries_after_server_error_with_the_same_event_ids() {
     let fake = Fake::new();
-    fake.respond(|call, _| (call < 3).then(|| (500, r#"{"error":"internal error"}"#.into())));
+    let tried = Arc::new(Mutex::new(Vec::new()));
+    let record = Arc::clone(&tried);
+    fake.respond(move |call, body| {
+        if call >= 3 {
+            return None;
+        }
+        for e in events(&[body.to_vec()]) {
+            record.lock().unwrap().push(e["event_id"].clone());
+        }
+        Some((500, r#"{"error":"internal error"}"#.into()))
+    });
     let (cfg, _dir) = config(&fake);
     let client = start(&cfg, tuning());
     client.track("a", Props::new()).unwrap();
     client.flush();
-    assert_eq!(names(&events(&fake.wait(1))), "a");
+    let sent = events(&fake.wait(1));
+    assert_eq!(names(&sent), "a");
     assert_eq!(fake.calls(), 4);
+    let id = &sent[0]["event_id"];
+    assert!(id.is_string());
+    assert_eq!(
+        *tried.lock().unwrap(),
+        vec![id.clone(), id.clone(), id.clone()]
+    );
+}
+
+#[test]
+fn event_ids_differ() {
+    let fake = Fake::new();
+    let (cfg, _dir) = config(&fake);
+    let client = start(&cfg, tuning());
+    client.track("a", Props::new()).unwrap();
+    client.track("b", Props::new()).unwrap();
+    client.flush();
+    let sent = events(&fake.wait(1));
+    assert!(sent[0]["event_id"].is_string());
+    assert_ne!(sent[0]["event_id"], sent[1]["event_id"]);
 }
 
 struct FailingTransport {
@@ -459,7 +489,90 @@ fn session_events() {
     assert!(events[events.len() - 1].get("session_id").is_none());
     assert!(start_event["session_id"].is_string());
     assert_eq!(start_event["session_id"], end_event["session_id"]);
-    assert!(end_event["value"].as_f64().unwrap() > 0.0);
+
+    // Each value covers the time since the previous report, so they add up
+    // to the session's length.
+    let mut sum = 0.0;
+    for e in &events[2..events.len() - 1] {
+        let value = e["value"].as_f64().unwrap();
+        assert!(value > 0.0, "{e}");
+        sum += value;
+    }
+    let first = seconds_from_ts(&start_event["ts"]);
+    let last = seconds_from_ts(&end_event["ts"]);
+    assert_eq!(sum, (last - first) as f64);
+    assert!(!cfg.dir.join("session").exists());
+}
+
+/// Parses the seconds of a ts that format_time wrote, enough to compare two
+/// times on the same day.
+fn seconds_from_ts(ts: &Value) -> u64 {
+    let ts = ts.as_str().unwrap();
+    let field = |range: std::ops::Range<usize>| ts[range].parse::<u64>().unwrap();
+    field(11..13) * 3600 + field(14..16) * 60 + field(17..19)
+}
+
+#[test]
+fn next_client_ends_unended_session() {
+    let fake = Fake::new();
+    let (cfg, _dir) = config(&fake);
+    let a = start(&cfg, tuning());
+    a.start_session().unwrap();
+    a.set_user_id("u");
+    // Dropping stops the client the way a crash would, without ending its
+    // session.
+    let device_id = a.device_id().to_string();
+    let inner = Arc::clone(&a.inner);
+    drop(a);
+    inner.wait_done();
+
+    let saved: Value = serde_json::from_slice(&fs::read(cfg.dir.join("session")).unwrap()).unwrap();
+    start(&cfg, tuning()).close().unwrap();
+    let ends: Vec<Value> = events(&fake.wait(1))
+        .into_iter()
+        .filter(|e| e["name"] == "session.end")
+        .collect();
+    assert_eq!(ends.len(), 1, "{ends:?}");
+    let ts = UNIX_EPOCH + Duration::from_millis(saved["ts"].as_u64().unwrap());
+    let mut end = ends[0].clone();
+    assert!(end["event_id"].is_string());
+    end.as_object_mut().unwrap().remove("event_id");
+    assert_eq!(
+        normalize(end),
+        normalize(json!({
+            "name": "session.end",
+            "ts": format_time(ts),
+            "device_id": device_id,
+            "user_id": "u",
+            "session_id": saved["session_id"],
+            "platform": std::env::consts::OS,
+            "value": 0,
+            "props": {"abnormal": true},
+        }))
+    );
+    assert!(!cfg.dir.join("session").exists());
+}
+
+#[test]
+fn bad_saved_session_is_discarded() {
+    let fake = Fake::new();
+    let (mut cfg, _dir) = config(&fake);
+    fs::write(cfg.dir.join("session"), "{").unwrap();
+    let logs = Arc::new(Mutex::new(Vec::new()));
+    let record = Arc::clone(&logs);
+    cfg.log = Some(Arc::new(move |m: &str| {
+        record.lock().unwrap().push(m.to_string())
+    }));
+    let client = start(&cfg, tuning());
+    client.track("a", Props::new()).unwrap();
+    client.close().unwrap();
+    assert_eq!(names(&events(&fake.wait(1))), "a");
+    let logs = logs.lock().unwrap();
+    assert!(
+        logs.iter().any(|m| m.contains("previous session")),
+        "{logs:?}"
+    );
+    assert!(!cfg.dir.join("session").exists());
 }
 
 #[test]

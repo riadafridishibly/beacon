@@ -7,8 +7,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, Once, PoisonError};
 use std::thread;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use serde_json::value::RawValue;
 
@@ -174,6 +175,8 @@ impl Logger {
 struct Session {
     id: String,
     start: SystemTime,
+    /// The whole seconds of the session already sent.
+    reported: f64,
 }
 
 #[derive(Default)]
@@ -181,6 +184,34 @@ struct State {
     user_id: String,
     session: Option<Session>,
     closed: bool,
+}
+
+impl State {
+    /// Returns the open session's seconds since its last report, and the
+    /// running total to record once that report is queued. Rounding the
+    /// running total instead of each report keeps their sum equal to the
+    /// session's length.
+    fn unreported(&self, now: SystemTime) -> Option<(f64, f64)> {
+        let session = self.session.as_ref()?;
+        let total = now
+            .duration_since(session.start)
+            .unwrap_or_default()
+            .as_secs_f64()
+            .round()
+            .max(session.reported);
+        Some((total - session.reported, total))
+    }
+}
+
+/// The open session on disk, for the next run to end if this one stops
+/// without ending it. ts is the last time the session was known to be
+/// active, in Unix milliseconds.
+#[derive(Serialize, Deserialize)]
+struct SavedSession {
+    session_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    user_id: String,
+    ts: u64,
 }
 
 #[derive(Default)]
@@ -192,6 +223,7 @@ struct Signal {
 pub(crate) struct Inner {
     url: String,
     key: String,
+    dir: PathBuf,
     transport: Arc<dyn Transport>,
     pub(crate) queue: Queue,
     log: Logger,
@@ -273,6 +305,7 @@ impl Client {
         let inner = Arc::new(Inner {
             url: format!("{}/v1/events", config.endpoint.trim_end_matches('/')),
             key: config.key,
+            dir: config.dir,
             transport: config.transport,
             queue,
             log,
@@ -292,6 +325,7 @@ impl Client {
             finished: Condvar::new(),
         });
 
+        inner.end_previous_session();
         let worker = Worker {
             inner: Arc::clone(&inner),
             failures: 0,
@@ -314,7 +348,11 @@ impl Client {
     /// set_user_id sets the user_id of later events, "" for none. Only tester
     /// builds should call it.
     pub fn set_user_id(&self, id: &str) {
-        lock(&self.inner.state).user_id = id.to_string();
+        let mut state = lock(&self.inner.state);
+        state.user_id = id.to_string();
+        if !state.closed {
+            self.inner.save_session(&state, (self.inner.tuning.now)());
+        }
     }
 
     /// track queues an event. Report errors with track_error: the dashboard
@@ -356,18 +394,25 @@ impl Client {
     }
 
     /// start_session begins a session and sends session.start, then a
-    /// heartbeat each minute. It does nothing while a session is open.
+    /// heartbeat each minute. It does nothing while a session is open. A
+    /// session the app never ends, because it crashed or was killed, is
+    /// ended by the next Client opened on the same directory.
     pub fn start_session(&self) -> Result<(), Error> {
-        let mut state = lock(&self.inner.state);
+        let inner = &self.inner;
+        let mut state = lock(&inner.state);
         if state.session.is_some() {
             return Ok(());
         }
+        let now = (inner.tuning.now)();
         state.session = Some(Session {
-            id: (self.inner.tuning.new_id)()?,
-            start: (self.inner.tuning.now)(),
+            id: (inner.tuning.new_id)()?,
+            start: now,
+            reported: 0.0,
         });
-        self.inner
-            .enqueue_locked(&state, "session.start", None, None)
+        let event = inner.event(&state, "session.start", now, None, None);
+        inner.add(&state, event)?;
+        inner.save_session(&state, now);
+        Ok(())
     }
 
     /// end_session sends session.end and closes the session.
@@ -429,12 +474,22 @@ impl Inner {
         value: Option<f64>,
         props: Option<Box<RawValue>>,
     ) -> Result<(), Error> {
-        if state.closed {
-            return Err(Error::Closed);
-        }
-        let event = Event {
+        let event = self.event(state, name, (self.tuning.now)(), value, props);
+        self.add(state, event)
+    }
+
+    fn event(
+        &self,
+        state: &State,
+        name: &str,
+        now: SystemTime,
+        value: Option<f64>,
+        props: Option<Box<RawValue>>,
+    ) -> Event {
+        Event {
             name: name.to_string(),
-            ts: Some(format_time((self.tuning.now)())),
+            event_id: String::new(),
+            ts: Some(format_time(now)),
             device_id: self.device_id.clone(),
             user_id: state.user_id.clone(),
             session_id: state
@@ -447,7 +502,16 @@ impl Inner {
             os_version: self.os_version.clone(),
             value,
             props,
-        };
+        }
+    }
+
+    /// Queues event under a new event_id, which it keeps when it is sent
+    /// again.
+    fn add(&self, state: &State, mut event: Event) -> Result<(), Error> {
+        if state.closed {
+            return Err(Error::Closed);
+        }
+        event.event_id = (self.tuning.new_id)()?;
         event.validate()?;
         let line = serde_json::to_vec(&event).map_err(|e| Error::Invalid(e.to_string()))?;
         let (ready, written) = self.queue.add(&line);
@@ -459,31 +523,96 @@ impl Inner {
 
     fn end_session(&self) -> Result<(), Error> {
         let mut state = lock(&self.state);
-        let Some(seconds) = self.session_seconds(&state) else {
+        let now = (self.tuning.now)();
+        let Some((seconds, _)) = state.unreported(now) else {
             return Ok(());
         };
-        let result = self.enqueue_locked(&state, "session.end", Some(seconds), None);
+        let event = self.event(&state, "session.end", now, Some(seconds), None);
+        let result = self.add(&state, event);
         state.session = None;
+        self.remove_session();
         result
     }
 
     fn heartbeat(&self) {
-        let state = lock(&self.state);
-        let Some(seconds) = self.session_seconds(&state) else {
+        let mut state = lock(&self.state);
+        let now = (self.tuning.now)();
+        let Some((seconds, total)) = state.unreported(now) else {
             return;
         };
-        match self.enqueue_locked(&state, "session.heartbeat", Some(seconds), None) {
-            Ok(()) | Err(Error::Closed) => {}
+        let event = self.event(&state, "session.heartbeat", now, Some(seconds), None);
+        match self.add(&state, event) {
+            Ok(()) => {
+                if let Some(session) = &mut state.session {
+                    session.reported = total;
+                }
+                self.save_session(&state, now);
+            }
+            Err(Error::Closed) => {}
             Err(e) => self.log.log(&format!("heartbeat: {e}")),
         }
     }
 
-    fn session_seconds(&self, state: &State) -> Option<f64> {
-        let session = state.session.as_ref()?;
-        let elapsed = (self.tuning.now)()
-            .duration_since(session.start)
-            .unwrap_or_default();
-        Some(elapsed.as_secs_f64().round())
+    fn session_path(&self) -> PathBuf {
+        self.dir.join("session")
+    }
+
+    fn save_session(&self, state: &State, now: SystemTime) {
+        let Some(session) = &state.session else {
+            return;
+        };
+        let saved = SavedSession {
+            session_id: session.id.clone(),
+            user_id: state.user_id.clone(),
+            ts: unix_millis(now),
+        };
+        let result = serde_json::to_vec(&saved)
+            .map_err(io::Error::other)
+            .and_then(|data| write_file_atomic(&self.session_path(), &data));
+        if let Err(e) = result {
+            self.log.log(&format!("save session: {e}"));
+        }
+    }
+
+    fn remove_session(&self) {
+        match fs::remove_file(self.session_path()) {
+            Err(e) if e.kind() != io::ErrorKind::NotFound => {
+                self.log.log(&format!("remove session: {e}"));
+            }
+            _ => {}
+        }
+    }
+
+    /// Sends session.end, marked abnormal, for a session the previous run
+    /// left open.
+    fn end_previous_session(&self) {
+        let data = match fs::read(self.session_path()) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return,
+            other => other,
+        };
+        let result = data.map_err(Error::from).and_then(|data| {
+            let saved: SavedSession =
+                serde_json::from_slice(&data).map_err(|e| Error::Invalid(e.to_string()))?;
+            if saved.session_id.is_empty() {
+                return Err(Error::Invalid("no session_id".into()));
+            }
+            let props = RawValue::from_string(r#"{"abnormal":true}"#.to_string())
+                .map_err(|e| Error::Invalid(e.to_string()))?;
+            let state = lock(&self.state);
+            let now = (self.tuning.now)();
+            let mut event = self.event(&state, "session.end", now, Some(0.0), Some(props));
+            event.session_id = saved.session_id;
+            event.user_id = saved.user_id;
+            // A time that can't be right is left out, and the server uses the
+            // time the event arrives.
+            event.ts = (saved.ts > 0 && saved.ts <= unix_millis(now))
+                .then(|| format_time(UNIX_EPOCH + Duration::from_millis(saved.ts)));
+            self.add(&state, event)
+        });
+        if let Err(e) = result {
+            self.log.log(&format!("previous session: {e}"));
+        }
+        self.remove_session();
     }
 
     fn notify(&self) {
@@ -728,6 +857,11 @@ fn load_device_id(dir: &Path, new_id: &dyn Fn() -> io::Result<String>) -> io::Re
     let id = new_id()?;
     write_file_atomic(&path, id.as_bytes())?;
     Ok(id)
+}
+
+fn unix_millis(t: SystemTime) -> u64 {
+    let millis = t.duration_since(UNIX_EPOCH).unwrap_or_default().as_millis();
+    u64::try_from(millis).unwrap_or(u64::MAX)
 }
 
 fn random_id() -> io::Result<String> {

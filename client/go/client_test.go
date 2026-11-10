@@ -125,6 +125,8 @@ func must(t *testing.T, err error) {
 
 type wireEvent struct {
 	Name      string          `json:"name"`
+	EventID   string          `json:"event_id"`
+	TS        time.Time       `json:"ts"`
 	DeviceID  string          `json:"device_id"`
 	UserID    string          `json:"user_id"`
 	SessionID string          `json:"session_id"`
@@ -184,17 +186,46 @@ func TestSendsOnInterval(t *testing.T) {
 func TestRetriesAfterServerError(t *testing.T) {
 	t.Parallel()
 	srv := newServer(t)
-	srv.respond = func(call int, _ []byte) (int, string) {
-		if call < 3 {
-			return http.StatusInternalServerError, `{"error":"internal error"}`
+	var mu sync.Mutex
+	var tried []string // event ids of the failed attempts
+	srv.respond = func(call int, body []byte) (int, string) {
+		if call >= 3 {
+			return -1, ""
 		}
-		return -1, ""
+		var batch struct{ Events []wireEvent }
+		_ = json.Unmarshal(body, &batch)
+		mu.Lock()
+		for _, e := range batch.Events {
+			tried = append(tried, e.EventID)
+		}
+		mu.Unlock()
+		return http.StatusInternalServerError, `{"error":"internal error"}`
 	}
 	c := newClient(t, srv.config(t))
 	must(t, c.Track("a", nil))
 	c.Flush()
-	if got := names(decodeEvents(t, srv.wait(t, 1))); got != "a" {
-		t.Errorf("events %q", got)
+	events := decodeEvents(t, srv.wait(t, 1))
+	if got := names(events); got != "a" {
+		t.Fatalf("events %q", got)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	id := events[0].EventID
+	if id == "" || len(tried) != 3 || tried[0] != id || tried[1] != id || tried[2] != id {
+		t.Errorf("event ids %q, then %q", tried, id)
+	}
+}
+
+func TestEventIDsDiffer(t *testing.T) {
+	t.Parallel()
+	srv := newServer(t)
+	c := newClient(t, srv.config(t))
+	must(t, c.Track("a", nil))
+	must(t, c.Track("b", nil))
+	c.Flush()
+	events := decodeEvents(t, srv.wait(t, 1))
+	if len(events) != 2 || events[0].EventID == "" || events[0].EventID == events[1].EventID {
+		t.Errorf("events %+v", events)
 	}
 }
 
@@ -313,8 +344,90 @@ func TestSessionEvents(t *testing.T) {
 	if start.SessionID == "" || start.SessionID != end.SessionID {
 		t.Errorf("session ids %q and %q", start.SessionID, end.SessionID)
 	}
-	if end.Value == nil || *end.Value <= 0 {
-		t.Errorf("session.end value %v", end.Value)
+	// Each value covers the time since the previous report, so they add up to
+	// the session's length.
+	var sum float64
+	for _, e := range events[2 : len(events)-1] {
+		if e.Value == nil || *e.Value <= 0 {
+			t.Fatalf("%s value %v", e.Name, e.Value)
+		}
+		sum += *e.Value
+	}
+	if want := end.TS.Sub(start.TS).Seconds(); sum != want {
+		t.Errorf("values add up to %v, want %v", sum, want)
+	}
+	if _, err := os.Stat(filepath.Join(cfg.Dir, "session")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("ended session still saved: %v", err)
+	}
+}
+
+// kill stops c the way a crash would, without ending its session.
+func kill(c *Client) {
+	c.closeOnce.Do(func() {
+		c.mu.Lock()
+		c.closed = true
+		c.mu.Unlock()
+		close(c.stop)
+		<-c.done
+		c.cancel()
+	})
+}
+
+func TestNextClientEndsUnendedSession(t *testing.T) {
+	t.Parallel()
+	srv := newServer(t)
+	cfg := srv.config(t)
+	a := newClient(t, cfg)
+	must(t, a.StartSession())
+	a.SetUserID("u")
+	kill(a)
+
+	b, err := os.ReadFile(filepath.Join(cfg.Dir, "session"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved savedSession
+	must(t, json.Unmarshal(b, &saved))
+
+	must(t, newClient(t, cfg).Close())
+	srv.mu.Lock()
+	events := decodeEvents(t, srv.bodies)
+	srv.mu.Unlock()
+	var ends []wireEvent
+	for _, e := range events {
+		if e.Name == "session.end" {
+			ends = append(ends, e)
+		}
+	}
+	if len(ends) != 1 {
+		t.Fatalf("session.end events %+v", ends)
+	}
+	end := ends[0]
+	if end.SessionID != saved.SessionID || end.UserID != "u" || end.TS.UnixMilli() != saved.TS ||
+		end.Value == nil || *end.Value != 0 || string(end.Props) != `{"abnormal":true}` {
+		t.Errorf("session.end %+v %s, saved %+v", end, end.Props, saved)
+	}
+	if _, err := os.Stat(filepath.Join(cfg.Dir, "session")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("session still saved: %v", err)
+	}
+}
+
+func TestBadSavedSessionIsDiscarded(t *testing.T) {
+	t.Parallel()
+	srv := newServer(t)
+	cfg := srv.config(t)
+	must(t, os.MkdirAll(cfg.Dir, 0o700))
+	must(t, os.WriteFile(filepath.Join(cfg.Dir, "session"), []byte("{"), 0o600))
+	var logged atomic.Bool
+	cfg.Log = func(string) { logged.Store(true) }
+	c := newClient(t, cfg)
+	must(t, c.Track("a", nil))
+	must(t, c.Close())
+	if got := names(decodeEvents(t, srv.wait(t, 1))); got != "a" || !logged.Load() {
+		t.Errorf("events %q, logged %v", got, logged.Load())
+	}
+	if _, err := os.Stat(filepath.Join(cfg.Dir, "session")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("session still saved: %v", err)
 	}
 }
 

@@ -57,10 +57,10 @@ func seedOverview(t *testing.T, pool *pgxpool.Pool) {
 		ev("alpha", "error.sync", "d1", 2*time.Hour, withUser("u1"), withMessage("boom")),
 		ev("alpha", "error.sync", "d2", 3*time.Hour, withMessage("boom")),
 		ev("alpha", "error.auth", "d1", 4*time.Hour),
-		// d1 sent heartbeats and no end; its length is the largest heartbeat.
+		// d1 sent heartbeats and no end; its length is the sum of its heartbeats.
 		ev("alpha", "session.start", "d1", 5*time.Hour, withSession("s1")),
 		ev("alpha", "session.heartbeat", "d1", 5*time.Hour-time.Minute, withSession("s1"), withValue(60)),
-		ev("alpha", "session.heartbeat", "d1", 5*time.Hour-2*time.Minute, withSession("s1"), withValue(120)),
+		ev("alpha", "session.heartbeat", "d1", 5*time.Hour-2*time.Minute, withSession("s1"), withValue(60)),
 		ev("alpha", "session.end", "d2", 5*time.Hour, withSession("s2"), withValue(240)),
 		// Two days ago: an open without a value.
 		ev("alpha", "app.open", "d1", 2*day),

@@ -2,6 +2,7 @@
   "events": [
     {
       "name": "session.start",
+      "event_id": "fixed-id",
       "ts": "2026-11-08T11:59:00Z",
       "device_id": "fixed-id",
       "user_id": "tester@example.com",
@@ -12,6 +13,7 @@
     },
     {
       "name": "sync.done",
+      "event_id": "fixed-id",
       "ts": "2026-11-08T11:59:00Z",
       "device_id": "fixed-id",
       "user_id": "tester@example.com",
@@ -26,6 +28,7 @@
     },
     {
       "name": "session.end",
+      "event_id": "fixed-id",
       "ts": "2026-11-08T11:59:00Z",
       "device_id": "fixed-id",
       "user_id": "tester@example.com",

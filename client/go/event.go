@@ -34,6 +34,7 @@ type Props map[string]any
 
 type event struct {
 	Name       string          `json:"name"`
+	EventID    string          `json:"event_id,omitempty"`
 	TS         *time.Time      `json:"ts,omitempty"`
 	DeviceID   string          `json:"device_id,omitempty"`
 	UserID     string          `json:"user_id,omitempty"`
@@ -53,14 +54,14 @@ func (e *event) validate() error {
 		return fmt.Errorf("beacon: name %q must be at most %d lowercase letters, digits and underscores, in dot-separated parts", e.Name, maxNameLen)
 	case e.DeviceID == "":
 		return errors.New("beacon: device_id is required")
-	case len(e.DeviceID) > maxIDLen || len(e.SessionID) > maxIDLen:
-		return fmt.Errorf("beacon: device_id and session_id must be at most %d bytes", maxIDLen)
+	case len(e.DeviceID) > maxIDLen || len(e.SessionID) > maxIDLen || len(e.EventID) > maxIDLen:
+		return fmt.Errorf("beacon: device_id, session_id and event_id must be at most %d bytes", maxIDLen)
 	case len(e.UserID) > maxUserLen:
 		return fmt.Errorf("beacon: user_id must be at most %d bytes", maxUserLen)
 	case len(e.AppVersion) > maxAttrLen || len(e.Platform) > maxAttrLen || len(e.OSVersion) > maxAttrLen:
 		return fmt.Errorf("beacon: app_version, platform and os_version must be at most %d bytes", maxAttrLen)
-	case hasNUL(e.DeviceID, e.UserID, e.SessionID, e.AppVersion, e.Platform, e.OSVersion):
-		return errors.New("beacon: device_id, user_id, session_id, app_version, platform and os_version must not contain NUL")
+	case hasNUL(e.DeviceID, e.UserID, e.SessionID, e.AppVersion, e.Platform, e.OSVersion, e.EventID):
+		return errors.New("beacon: device_id, user_id, session_id, app_version, platform, os_version and event_id must not contain NUL")
 	case len(e.Props) > maxProps:
 		return fmt.Errorf("beacon: props must be at most %d bytes", maxProps)
 	case len(e.Props) > 0 && e.Props[0] != '{':

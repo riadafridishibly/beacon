@@ -12,6 +12,8 @@ import { nodeOptions } from "./node.ts";
 /** Received is an event as the test server decodes it. */
 export interface Received {
   name: string;
+  event_id?: string;
+  ts?: string;
   device_id?: string;
   user_id?: string;
   session_id?: string;
@@ -19,7 +21,7 @@ export interface Received {
   props?: unknown;
 }
 
-type Respond = (call: number) => [number, string] | null;
+type Respond = (call: number, body: string) => [number, string] | null;
 
 /** TestServer records the bodies it accepts. */
 export class TestServer {
@@ -53,7 +55,7 @@ export class TestServer {
       return;
     }
     const body = (gzipped ? gunzipSync(raw) : raw).toString();
-    const [status, reply] = this.respond?.(this.calls++) ?? [202, `{"accepted":1}`];
+    const [status, reply] = this.respond?.(this.calls++, body) ?? [202, `{"accepted":1}`];
     if (status === 202) this.bodies.push(body);
     res.writeHead(status).end(reply);
   }

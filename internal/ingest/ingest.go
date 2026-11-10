@@ -65,13 +65,14 @@ type Fields struct {
 
 // Event is one thing that happened. Value is its single numeric measure,
 // such as a duration in milliseconds. Props holds everything else, as a
-// JSON object.
+// JSON object. EventID stays the same when a client retries the event.
 type Event struct {
 	Fields
-	Name  string          `json:"name"`
-	TS    *time.Time      `json:"ts,omitempty"`
-	Value *float64        `json:"value,omitempty"`
-	Props json.RawMessage `json:"props,omitempty"`
+	Name    string          `json:"name"`
+	EventID string          `json:"event_id,omitempty"`
+	TS      *time.Time      `json:"ts,omitempty"`
+	Value   *float64        `json:"value,omitempty"`
+	Props   json.RawMessage `json:"props,omitempty"`
 }
 
 // Apps resolves an ingest key to an app id, "" when the key is unknown.
@@ -236,14 +237,14 @@ func toRow(appID string, shared Fields, e Event, now time.Time) (db.InsertEvents
 		return db.InsertEventsParams{}, fmt.Errorf("name %q must be at most %d lowercase letters, digits and underscores, in dot-separated parts", e.Name, maxNameLen)
 	case f.DeviceID == "":
 		return db.InsertEventsParams{}, errors.New("device_id is required")
-	case len(f.DeviceID) > maxIDLen || len(f.SessionID) > maxIDLen:
-		return db.InsertEventsParams{}, fmt.Errorf("device_id and session_id must be at most %d bytes", maxIDLen)
+	case len(f.DeviceID) > maxIDLen || len(f.SessionID) > maxIDLen || len(e.EventID) > maxIDLen:
+		return db.InsertEventsParams{}, fmt.Errorf("device_id, session_id and event_id must be at most %d bytes", maxIDLen)
 	case len(f.UserID) > maxUserLen:
 		return db.InsertEventsParams{}, fmt.Errorf("user_id must be at most %d bytes", maxUserLen)
 	case len(f.AppVersion) > maxAttrLen || len(f.Platform) > maxAttrLen || len(f.OSVersion) > maxAttrLen:
 		return db.InsertEventsParams{}, fmt.Errorf("app_version, platform and os_version must be at most %d bytes", maxAttrLen)
-	case hasNUL(f.DeviceID, f.UserID, f.SessionID, f.AppVersion, f.Platform, f.OSVersion):
-		return db.InsertEventsParams{}, errors.New("device_id, user_id, session_id, app_version, platform and os_version must not contain NUL")
+	case hasNUL(f.DeviceID, f.UserID, f.SessionID, f.AppVersion, f.Platform, f.OSVersion, e.EventID):
+		return db.InsertEventsParams{}, errors.New("device_id, user_id, session_id, app_version, platform, os_version and event_id must not contain NUL")
 	}
 
 	props := e.Props
