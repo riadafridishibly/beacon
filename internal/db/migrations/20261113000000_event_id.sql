@@ -5,5 +5,4 @@ ALTER TABLE events ADD COLUMN event_id text;
 CREATE UNIQUE INDEX events_app_event_id ON events (app_id, event_id) WHERE event_id IS NOT NULL;
 
 -- +goose Down
-DROP INDEX events_app_event_id;
 ALTER TABLE events DROP COLUMN event_id;

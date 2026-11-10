@@ -3,6 +3,7 @@
 package ingest
 
 import (
+	"bytes"
 	"compress/gzip"
 	"context"
 	"encoding/json"
@@ -140,12 +141,17 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		rows[i] = row
 	}
-	events, err := json.Marshal(rows)
-	if err == nil {
-		_, err = h.DB.IngestEvents(r.Context(), db.IngestEventsParams{
-			AppID: appID, Country: opt(country), City: opt(city), Events: events,
-		})
+	var events bytes.Buffer
+	enc := json.NewEncoder(&events)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(rows); err != nil {
+		slog.ErrorContext(r.Context(), "encode events", "app", appID, "err", err)
+		writeError(w, http.StatusInternalServerError, "internal error", -1)
+		return
 	}
+	stored, err := h.DB.IngestEvents(r.Context(), db.IngestEventsParams{
+		AppID: appID, Country: opt(country), City: opt(city), Events: events.Bytes(),
+	})
 	if err != nil {
 		var pgErr *pgconn.PgError
 		errors.As(err, &pgErr)
@@ -164,6 +170,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		slog.ErrorContext(r.Context(), "insert events", "app", appID, "err", err)
 		writeError(w, http.StatusInternalServerError, "internal error", -1)
 		return
+	}
+	if skipped := int64(len(rows)) - stored; skipped > 0 {
+		slog.InfoContext(r.Context(), "skipped events already stored", "app", appID, "events", skipped)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
@@ -290,6 +299,9 @@ func toRow(shared Fields, e Event, now time.Time) (row, error) {
 	if e.TS != nil && !e.TS.IsZero() && e.TS.Before(now.Add(maxFutureTS)) {
 		ts = *e.TS
 	}
+	// Postgres keeps microseconds and rounds the text form, which could move
+	// an event just before midnight into the next day.
+	ts = ts.Truncate(time.Microsecond)
 
 	return row{
 		EventID:    e.EventID,

@@ -173,6 +173,19 @@ func TestIngestSkipsResentEvents(t *testing.T) {
 	}
 }
 
+func TestIngestTruncatesTime(t *testing.T) {
+	t.Parallel()
+	pool, h, key := setup(t)
+	body := `{"events": [{"name": "a", "device_id": "d1", "ts": "2026-11-07T23:59:59.9999996Z"}]}`
+	if rec := post(t, h, key, []byte(body), false); rec.Code != http.StatusAccepted {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	want := time.Date(2026, 11, 7, 23, 59, 59, 999999000, time.UTC)
+	if got := load(t, pool)[0].Ts; !got.Equal(want) {
+		t.Errorf("ts %v, want %v", got, want)
+	}
+}
+
 func TestIngestEventsStoresPlace(t *testing.T) {
 	t.Parallel()
 	pool, _, _ := setup(t)
