@@ -9,13 +9,16 @@ PG_ADMIN_URL        ?= postgres://localhost:5432/postgres?sslmode=disable
 BEACON_DATABASE_URL ?= postgres://localhost:5432/beacon?sslmode=disable
 export BEACON_DATABASE_URL
 
-.PHONY: help setup db-setup db-up dev dev-vite dev-go seed gen fmt check test build frontend build-linux deploy clean
+.PHONY: help setup hooks db-setup db-up dev dev-vite dev-go seed gen fmt check test build frontend build-linux deploy clean
 
 help: ## List targets
 	@grep -E '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
 
-setup: ## Install the pnpm packages the frontend build needs
+setup: hooks ## Install the pnpm packages the frontend build needs
 	pnpm install
+
+hooks: ## Run make check before every git push
+	git config core.hooksPath .githooks
 
 db-setup: ## Create the beacon database on PG_ADMIN_URL
 	psql "$(PG_ADMIN_URL)" -tAc "SELECT 1 FROM pg_database WHERE datname = 'beacon'" | grep -q 1 \

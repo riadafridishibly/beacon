@@ -12,7 +12,7 @@ the repo. Don't add docs files.
 
 ## Commands
 
-- `make setup`: install pnpm packages (once).
+- `make setup`: install pnpm packages and the pre-push hook (once). There is no hosted CI; the hook runs `make check` on a clean tree before every push.
 - `make db-setup`: create the `beacon` database (once). `make db-up` starts Postgres in Docker instead.
 - `make dev`: Vite plus the server with live reload; open http://localhost:7350.
 - `make seed`: add or replace a `demo` app with 90 days of generated events.
