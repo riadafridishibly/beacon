@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/riadafridishibly/beacon/internal/db"
 	"github.com/riadafridishibly/beacon/internal/testdb"
@@ -98,5 +99,44 @@ func TestRevoke(t *testing.T) {
 		if _, err := Revoke(ctx, q, p); !errors.Is(err, ErrKeyNotFound) {
 			t.Errorf("Revoke(%q) = %v, want ErrKeyNotFound", p, err)
 		}
+	}
+}
+
+func TestDelete(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	pool := testdb.New(t)
+	q := db.New(pool)
+
+	key, err := Create(ctx, pool, "demo", "Demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Create(ctx, pool, "other", "Other"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.InsertEvents(ctx, []db.InsertEventsParams{
+		{AppID: "demo", Name: "app.open", Ts: time.Now(), DeviceID: "d1"},
+		{AppID: "other", Name: "app.open", Ts: time.Now(), DeviceID: "d1"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Delete(ctx, q, "demo"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := NewResolver(q).App(ctx, key); err != nil || got != "" {
+		t.Errorf("key of deleted app: %q, %v", got, err)
+	}
+	var demo, other int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FILTER (WHERE app_id = 'demo'), count(*) FILTER (WHERE app_id = 'other') FROM events").Scan(&demo, &other); err != nil {
+		t.Fatal(err)
+	}
+	if demo != 0 || other != 1 {
+		t.Errorf("events left: demo %d, other %d; want 0 and 1", demo, other)
+	}
+
+	if err := Delete(ctx, q, "demo"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("second delete: %v, want ErrNotFound", err)
 	}
 }

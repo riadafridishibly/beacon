@@ -40,6 +40,9 @@ var ErrBadID = errors.New("app id must be 1-63 lowercase letters, digits or dash
 // ErrExists is returned when creating an app whose id is taken.
 var ErrExists = errors.New("an app with that id already exists")
 
+// ErrNotFound is returned for an app id that matches no app.
+var ErrNotFound = errors.New("no app has that id")
+
 // ErrKeyNotFound is returned for a key prefix that matches no ingest key.
 var ErrKeyNotFound = errors.New("no ingest key has that prefix")
 
@@ -103,6 +106,18 @@ func Revoke(ctx context.Context, q *db.Queries, prefix string) (string, error) {
 		return "", fmt.Errorf("revoke key: %w", err)
 	}
 	return appID, nil
+}
+
+// Delete removes an app with its ingest keys, views and events.
+func Delete(ctx context.Context, q *db.Queries, id string) error {
+	n, err := q.DeleteApp(ctx, id)
+	if err != nil {
+		return fmt.Errorf("delete app: %w", err)
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func hashKey(key string) []byte {
