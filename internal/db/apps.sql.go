@@ -102,13 +102,16 @@ func (q *Queries) CreateAppKey(ctx context.Context, arg CreateAppKeyParams) (int
 	return id, err
 }
 
-const deleteApp = `-- name: DeleteApp :exec
+const deleteApp = `-- name: DeleteApp :execrows
 DELETE FROM apps WHERE id = $1
 `
 
-func (q *Queries) DeleteApp(ctx context.Context, id string) error {
-	_, err := q.db.Exec(ctx, deleteApp, id)
-	return err
+func (q *Queries) DeleteApp(ctx context.Context, id string) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteApp, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const getApp = `-- name: GetApp :one

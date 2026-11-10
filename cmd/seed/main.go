@@ -72,7 +72,7 @@ func seed(ctx context.Context, pool *pgxpool.Pool, now time.Time) (int64, error)
 	case err == nil && app.Name != appName:
 		return 0, fmt.Errorf("app %q already exists and wasn't created by seed", appID)
 	case err == nil:
-		if err := q.DeleteApp(ctx, appID); err != nil {
+		if err := apps.Delete(ctx, q, appID); err != nil {
 			return 0, err
 		}
 	case !errors.Is(err, pgx.ErrNoRows):

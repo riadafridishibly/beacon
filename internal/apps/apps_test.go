@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/riadafridishibly/beacon/internal/db"
 	"github.com/riadafridishibly/beacon/internal/testdb"
@@ -97,6 +98,57 @@ func TestRevoke(t *testing.T) {
 	for _, p := range []string{"bk_222222", "bk_short", "", "bk_\x00\x00\x00\x00\x00\x00"} {
 		if _, err := Revoke(ctx, q, p); !errors.Is(err, ErrKeyNotFound) {
 			t.Errorf("Revoke(%q) = %v, want ErrKeyNotFound", p, err)
+		}
+	}
+}
+
+func TestDelete(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	pool := testdb.New(t)
+	q := db.New(pool)
+
+	key, err := Create(ctx, pool, "demo", "Demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Create(ctx, pool, "other", "Other"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.InsertEvents(ctx, []db.InsertEventsParams{
+		{AppID: "demo", Name: "app.open", Ts: time.Now(), DeviceID: "d1"},
+		{AppID: "other", Name: "app.open", Ts: time.Now(), DeviceID: "d1"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.CreateView(ctx, db.CreateViewParams{
+		AppID: "demo", Title: "Opens", Event: "app.open", Measures: []string{"count"},
+		Filter: []byte("{}"), Shape: "table", MaxViews: 20,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Delete(ctx, q, "demo"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := NewResolver(q).App(ctx, key); err != nil || got != "" {
+		t.Errorf("key of deleted app: %q, %v", got, err)
+	}
+	var demo, other int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FILTER (WHERE app_id = 'demo'), count(*) FILTER (WHERE app_id = 'other') FROM events").Scan(&demo, &other); err != nil {
+		t.Fatal(err)
+	}
+	if demo != 0 || other != 1 {
+		t.Errorf("events left: demo %d, other %d; want 0 and 1", demo, other)
+	}
+
+	if views, err := q.ListViews(ctx, "demo"); err != nil || len(views) != 0 {
+		t.Errorf("views of deleted app: %d, %v", len(views), err)
+	}
+
+	for _, id := range []string{"demo", "Bad_ID", "\xff"} {
+		if err := Delete(ctx, q, id); !errors.Is(err, ErrNotFound) {
+			t.Errorf("Delete(%q) = %v, want ErrNotFound", id, err)
 		}
 	}
 }

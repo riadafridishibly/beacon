@@ -30,6 +30,7 @@ const usage = `usage:
   beacon app key <id>            print a new ingest key for an app
   beacon app list                list apps and their ingest keys
   beacon app revoke <key prefix> stop accepting an ingest key
+  beacon app delete <id>         delete an app with its keys, views and events
   beacon user create <email>     add a dashboard account and print its password
   beacon user reset <email>      print a new password and sign the account out`
 
@@ -217,6 +218,12 @@ func appCmd(ctx context.Context, cfg config.Config, args []string) error {
 			return err
 		}
 		fmt.Printf("revoked %s of app %s; a running server can accept it for up to a minute\n", args[1], appID)
+		return nil
+	case args[0] == "delete" && len(args) == 2:
+		if err := apps.Delete(ctx, q, args[1]); err != nil {
+			return err
+		}
+		fmt.Printf("deleted app %s with its keys, views and events\n", args[1])
 		return nil
 	}
 	return errors.New(usage)

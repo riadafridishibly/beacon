@@ -270,3 +270,18 @@ func TestRateLimitByKey(t *testing.T) {
 		t.Fatalf("other key: %d %s", rec.Code, rec.Body)
 	}
 }
+
+func TestIngestDeletedApp(t *testing.T) {
+	t.Parallel()
+	pool, h, key := setup(t)
+	body := []byte(`{"events": [{"name": "app.open", "device_id": "d1"}]}`)
+	if rec := post(t, h, key, body, false); rec.Code != http.StatusAccepted {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	if err := apps.Delete(context.Background(), db.New(pool), "demo"); err != nil {
+		t.Fatal(err)
+	}
+	if rec := post(t, h, key, body, false); rec.Code != http.StatusUnauthorized {
+		t.Errorf("cached key of deleted app: status %d, want 401: %s", rec.Code, rec.Body)
+	}
+}

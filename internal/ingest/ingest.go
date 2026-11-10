@@ -141,10 +141,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		rows[i] = row
 	}
 	if _, err := h.DB.InsertEvents(r.Context(), rows); err != nil {
+		var pgErr *pgconn.PgError
+		errors.As(err, &pgErr)
+		// The app was deleted while the Resolver still caches its key.
+		if pgErr != nil && pgErr.Code == "23503" {
+			writeError(w, http.StatusUnauthorized, "unknown ingest key", -1)
+			return
+		}
 		// A value toRow can't foresee, such as a number too large for jsonb.
 		// A 500 would make the client resend this batch forever.
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && strings.HasPrefix(pgErr.Code, "22") {
+		if pgErr != nil && strings.HasPrefix(pgErr.Code, "22") {
 			slog.WarnContext(r.Context(), "rejected batch", "app", appID, "err", err)
 			writeError(w, http.StatusBadRequest, "batch contains a value that can't be stored", -1)
 			return
