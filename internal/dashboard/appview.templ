@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"slices"
 	"strconv"
 
 	"github.com/riadafridishibly/beacon/internal/db"
@@ -83,13 +84,32 @@ templ viewFormPage(nav *web.Nav, app db.App, f viewForm) {
 					}
 				</datalist>
 			}
-			@web.Field("Measure", "agg", f.AggError) {
-				<select { web.InputAttrs("agg", f.AggError)... } class="select w-full">
-					for _, a := range aggregates {
-						<option value={ a.ID } selected?={ a.ID == f.Agg }>{ a.Label }</option>
+			<fieldset
+				class="space-y-1.5"
+				if f.MeasureError != "" {
+					aria-describedby="measure-error"
+				}
+			>
+				<legend class="mb-1.5 text-sm font-medium">Measures</legend>
+				<div class="flex flex-wrap gap-x-5 gap-y-2">
+					for _, id := range measureIDs {
+						<label class="flex items-center gap-2 text-sm">
+							<input
+								type="checkbox"
+								name="measure"
+								value={ id }
+								checked?={ slices.Contains(f.Measures, id) }
+								class="checkbox checkbox-sm"
+							/>
+							{ describeMeasures([]string{ id }) }
+						</label>
 					}
-				</select>
-			}
+				</div>
+				<p class="text-sm opacity-60">Events and devices can share a chart, and so can p50 and p95. The sum goes alone. A table sorts by the first one listed.</p>
+				if f.MeasureError != "" {
+					<p id="measure-error" class="text-sm text-error">{ f.MeasureError }</p>
+				}
+			</fieldset>
 			@web.Field("Group by", "group_by", f.GroupByError) {
 				<input
 					type="text"
@@ -170,16 +190,16 @@ templ viewTable(g *viewGroups) {
 			<thead>
 				<tr>
 					<th scope="col" class="font-mono">{ g.Field }</th>
-					@viewHeader("Events", g.Agg == "count")
-					if g.Agg == "distinct_devices" {
-						@viewHeader("Devices", true)
+					@viewHeader("Events", g.sortedBy("count"))
+					if g.shows("distinct_devices") {
+						@viewHeader("Devices", g.sortedBy("distinct_devices"))
 					}
-					if g.Agg == "sum" {
+					if g.shows("sum") {
 						@viewHeader("Sum", true)
 					}
 					if g.Values {
-						@viewHeader("p50", g.Agg == "p50")
-						@viewHeader("p95", g.Agg == "p95")
+						@viewHeader("p50", g.sortedBy("p50"))
+						@viewHeader("p95", g.sortedBy("p95"))
 					}
 				</tr>
 			</thead>
@@ -194,10 +214,10 @@ templ viewTable(g *viewGroups) {
 							}
 						</td>
 						<td class="text-right tabular-nums">{ web.Count(r.Events) }</td>
-						if g.Agg == "distinct_devices" {
+						if g.shows("distinct_devices") {
 							<td class="text-right tabular-nums">{ web.Count(r.Devices) }</td>
 						}
-						if g.Agg == "sum" {
+						if g.shows("sum") {
 							<td class="text-right tabular-nums">{ measureText(r.WithValue, r.Total) }</td>
 						}
 						if g.Values {

@@ -36,11 +36,11 @@ type AppView struct {
 	AppID     string
 	Title     string
 	Event     string
-	Agg       string
 	GroupBy   string
 	Filter    []byte
 	CreatedAt time.Time
 	Shape     string
+	Measures  []string
 }
 
 type Event struct {

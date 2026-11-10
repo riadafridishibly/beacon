@@ -50,10 +50,40 @@ func TestValidateTitle(t *testing.T) {
 		"a\x00b":                 "Remove the NUL character.",
 		strings.Repeat("a", 101): "Use at most 100 characters.",
 	} {
-		f := viewForm{Title: title, Event: "vpn.connect", Agg: "count"}
+		f := viewForm{Title: title, Event: "vpn.connect", Measures: []string{"count"}}
 		f.validate()
 		if f.TitleError != want {
 			t.Errorf("title %.20q: error %q, want %q", title, f.TitleError, want)
+		}
+	}
+}
+
+func TestParseMeasures(t *testing.T) {
+	t.Parallel()
+	for in, want := range map[string]string{
+		"count":                        "[count]",
+		"p95 p50":                      "[p50 p95]",
+		"distinct_devices count count": "[count distinct_devices]",
+		"sum":                          "[sum]",
+	} {
+		got, msg := parseMeasures(strings.Fields(in))
+		if msg != "" || fmt.Sprint(got) != want {
+			t.Errorf("parseMeasures(%q) = %v, %q", in, got, msg)
+		}
+	}
+	for _, in := range []string{"", "mean", "count p95", "sum p50", "count sum"} {
+		if _, msg := parseMeasures(strings.Fields(in)); msg == "" {
+			t.Errorf("parseMeasures(%q) accepted", in)
+		}
+	}
+	for in, want := range map[string]string{
+		"count":                  "Events",
+		"count distinct_devices": "Events and devices",
+		"sum":                    "Sum of value",
+		"p50 p95":                "p50 and p95 of value",
+	} {
+		if got := describeMeasures(strings.Fields(in)); got != want {
+			t.Errorf("describeMeasures(%q) = %q", in, got)
 		}
 	}
 }
@@ -123,18 +153,20 @@ func TestOverviewViews(t *testing.T) {
 	pool := testdb.New(t)
 	seedViews(t, pool)
 	ok := []byte(`{"props.result":"ok"}`)
-	createView(t, pool, db.CreateViewParams{Title: "Connect time", Event: "vpn.connect", Agg: "p95", GroupBy: "props.server", Filter: ok})
-	createView(t, pool, db.CreateViewParams{Title: "Windows", Event: "vpn.connect", Agg: "count", GroupBy: "props.server", Filter: []byte(`{"platform":"windows"}`)})
-	createView(t, pool, db.CreateViewParams{Title: "Daily", Event: "vpn.connect", Agg: "count", Filter: ok})
-	createView(t, pool, db.CreateViewParams{Title: "Sum", Event: "vpn.connect", Agg: "sum", GroupBy: "platform"})
-	createView(t, pool, db.CreateViewParams{Title: "Broken", Event: "vpn.connect", Agg: "count", GroupBy: "city"})
+	createView(t, pool, db.CreateViewParams{Title: "Connect time", Event: "vpn.connect", Measures: []string{"p95"}, GroupBy: "props.server", Filter: ok})
+	createView(t, pool, db.CreateViewParams{Title: "Windows", Event: "vpn.connect", Measures: []string{"count"}, GroupBy: "props.server", Filter: []byte(`{"platform":"windows"}`)})
+	createView(t, pool, db.CreateViewParams{Title: "Daily", Event: "vpn.connect", Measures: []string{"count"}, Filter: ok})
+	createView(t, pool, db.CreateViewParams{Title: "Sum", Event: "vpn.connect", Measures: []string{"sum"}, GroupBy: "platform"})
+	createView(t, pool, db.CreateViewParams{Title: "Broken", Event: "vpn.connect", Measures: []string{"count"}, GroupBy: "city"})
+	createView(t, pool, db.CreateViewParams{Title: "Percentiles", Event: "vpn.connect", Measures: []string{"p50", "p95"}, Filter: ok})
+	createView(t, pool, db.CreateViewParams{Title: "Reach", Event: "vpn.connect", Measures: []string{"count", "distinct_devices"}, GroupBy: "props.server"})
 	d := &dashboard{pool: pool, q: db.New(pool), nowFunc: func() time.Time { return now }}
 
 	v, err := d.loadOverview(context.Background(), "alpha", "7d")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(v.Views) != 5 {
+	if len(v.Views) != 7 {
 		t.Fatalf("views = %d", len(v.Views))
 	}
 	type row struct {
@@ -168,6 +200,34 @@ func TestOverviewViews(t *testing.T) {
 	if broken := v.Views[4]; !broken.Failed || broken.Title != "Broken" || v.Views[3].Failed {
 		t.Errorf("a view that can't be computed = %+v", broken)
 	}
+
+	pct := v.Views[5]
+	if pct.Groups != nil || pct.Chart.Kind != lineChart || pct.Summary != `vpn.connect · p50 and p95 of value · props.result = "ok"` {
+		t.Fatalf("percentiles = %+v", pct)
+	}
+	var lines []string
+	for _, s := range pct.Chart.Series {
+		lines = append(lines, fmt.Sprintf("%s %s %.0f", s.Name, s.Stroke, *s.Values[6]))
+	}
+	if want := "[p50 stroke-chart-1 70 p95 stroke-chart-2 260]"; fmt.Sprint(lines) != want {
+		t.Errorf("percentile lines = %v, want %s", lines, want)
+	}
+
+	reach := v.Views[6].Groups
+	type group struct {
+		label           string
+		events, devices int64
+	}
+	var groups []group
+	for _, r := range reach.Rows {
+		groups = append(groups, group{r.Label, r.Events, r.Devices})
+	}
+	if want := []group{{"fra", 3, 2}, {"ams", 2, 2}, {"", 1, 1}}; fmt.Sprint(groups) != fmt.Sprint(want) {
+		t.Errorf("reach = %v, want %v", groups, want)
+	}
+	if !reach.sortedBy("count") || !reach.shows("distinct_devices") || reach.shows("sum") {
+		t.Errorf("reach measures = %v", reach.Measures)
+	}
 }
 
 func TestViewEditor(t *testing.T) {
@@ -186,7 +246,7 @@ func TestViewEditor(t *testing.T) {
 	}
 
 	form := url.Values{
-		"title": {"Connect time"}, "event": {"vpn.connect"}, "agg": {"p95"},
+		"title": {"Connect time"}, "event": {"vpn.connect"}, "measure": {"p95"},
 		"group_by": {"props.server"}, "filter": {`{"props.result": "ok"}`},
 	}
 	if w := c.do(http.MethodPost, "/apps/alpha/views", form); w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/apps/alpha/views" {
@@ -205,7 +265,7 @@ func TestViewEditor(t *testing.T) {
 		t.Error("overview misses the view")
 	}
 
-	bad := url.Values{"title": {""}, "event": {"Bad Name"}, "agg": {"mean"}, "group_by": {"city"}, "filter": {"[1]"}, "shape": {"pie"}}
+	bad := url.Values{"title": {""}, "event": {"Bad Name"}, "measure": {"mean"}, "group_by": {"city"}, "filter": {"[1]"}, "shape": {"pie"}}
 	w = c.do(http.MethodPost, path, bad)
 	if w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("invalid update: %d", w.Code)
@@ -215,7 +275,7 @@ func TestViewEditor(t *testing.T) {
 			t.Errorf("invalid update misses %q", msg)
 		}
 	}
-	ungrouped := url.Values{"title": {"Lines"}, "event": {"vpn.connect"}, "agg": {"count"}, "shape": {"line"}}
+	ungrouped := url.Values{"title": {"Lines"}, "event": {"vpn.connect"}, "measure": {"count"}, "shape": {"line"}}
 	if w := c.do(http.MethodPost, path, ungrouped); w.Code != http.StatusSeeOther {
 		t.Fatalf("lines without a group: %d", w.Code)
 	}
@@ -236,16 +296,35 @@ func TestViewEditor(t *testing.T) {
 		strings.Contains(body, `title="fra"`) {
 		t.Error("overview misses the lines")
 	}
+	form["measure"] = []string{"p50", "p95"}
+	if w := c.do(http.MethodPost, path, form); w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "Lines by day show one measure") {
+		t.Errorf("lines of two measures: %d", w.Code)
+	}
 	form.Del("shape")
+	form["measure"] = []string{"count", "p95"}
+	if w := c.do(http.MethodPost, path, form); w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "Combine events with devices") {
+		t.Errorf("measures without a unit: %d", w.Code)
+	}
+	form["measure"] = []string{"distinct_devices", "count"}
+	if w := c.do(http.MethodPost, path, form); w.Code != http.StatusSeeOther {
+		t.Fatalf("events and devices: %d", w.Code)
+	}
+	if body := c.do(http.MethodGet, path, nil).Body.String(); !strings.Contains(body, `value="count" checked`) ||
+		!strings.Contains(body, `value="distinct_devices" checked`) || strings.Contains(body, `value="p95" checked`) {
+		t.Error("edit form misses the stored measures")
+	}
+	if body := c.do(http.MethodGet, "/apps/alpha", nil).Body.String(); !strings.Contains(body, ">Devices</th>") {
+		t.Error("table misses the devices column")
+	}
 
 	form.Set("title", "Connect p50")
-	form.Set("agg", "p50")
+	form.Set("measure", "p50")
 	form.Set("filter", "")
 	if w := c.do(http.MethodPost, path, form); w.Code != http.StatusSeeOther {
 		t.Fatalf("update: %d", w.Code)
 	}
 	v, err := db.New(pool).GetView(context.Background(), db.GetViewParams{AppID: "alpha", ID: id})
-	if err != nil || v.Title != "Connect p50" || v.Agg != "p50" || string(v.Filter) != "{}" || v.Shape != "table" {
+	if err != nil || v.Title != "Connect p50" || fmt.Sprint(v.Measures) != "[p50]" || string(v.Filter) != "{}" || v.Shape != "table" {
 		t.Errorf("updated = %+v, %v", v, err)
 	}
 
@@ -276,9 +355,9 @@ func TestViewLimit(t *testing.T) {
 	seedViews(t, pool)
 	c.login(pw)
 	for range maxViews {
-		createView(t, pool, db.CreateViewParams{Title: "v", Event: "vpn.connect", Agg: "count"})
+		createView(t, pool, db.CreateViewParams{Title: "v", Event: "vpn.connect", Measures: []string{"count"}})
 	}
-	form := url.Values{"title": {"one more"}, "event": {"vpn.connect"}, "agg": {"count"}}
+	form := url.Values{"title": {"one more"}, "event": {"vpn.connect"}, "measure": {"count"}}
 	w := c.do(http.MethodPost, "/apps/alpha/views", form)
 	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "at most 20 views") {
 		t.Errorf("over the limit: %d", w.Code)
@@ -314,8 +393,8 @@ func TestViewLines(t *testing.T) {
 	if _, err := db.New(pool).InsertEvents(context.Background(), rows); err != nil {
 		t.Fatal(err)
 	}
-	createView(t, pool, db.CreateViewParams{Title: "Count", Event: "vpn.connect", Agg: "count", GroupBy: "props.server", Shape: "line"})
-	createView(t, pool, db.CreateViewParams{Title: "p95", Event: "vpn.connect", Agg: "p95", GroupBy: "props.server", Shape: "line"})
+	createView(t, pool, db.CreateViewParams{Title: "Count", Event: "vpn.connect", Measures: []string{"count"}, GroupBy: "props.server", Shape: "line"})
+	createView(t, pool, db.CreateViewParams{Title: "p95", Event: "vpn.connect", Measures: []string{"p95"}, GroupBy: "props.server", Shape: "line"})
 	d := &dashboard{pool: pool, q: db.New(pool), nowFunc: func() time.Time { return now }}
 
 	v, err := d.loadOverview(context.Background(), "alpha", "7d")
@@ -379,16 +458,23 @@ func TestViewLines(t *testing.T) {
 	}
 }
 
-func TestLineNeedsGroup(t *testing.T) {
+func TestViewConstraints(t *testing.T) {
 	t.Parallel()
 	pool := testdb.New(t)
 	if _, err := apps.Create(context.Background(), pool, "alpha", "Alpha"); err != nil {
 		t.Fatal(err)
 	}
-	_, err := db.New(pool).CreateView(context.Background(), db.CreateViewParams{
-		AppID: "alpha", Title: "v", Event: "vpn.connect", Agg: "count", Filter: []byte("{}"), Shape: "line", MaxViews: maxViews,
-	})
-	if err == nil {
-		t.Error("stored lines without a group")
+	for name, p := range map[string]db.CreateViewParams{
+		"lines without a group":    {Measures: []string{"count"}, Shape: "line"},
+		"lines of two measures":    {Measures: []string{"p50", "p95"}, GroupBy: "platform", Shape: "line"},
+		"measures without a unit":  {Measures: []string{"count", "p95"}, Shape: "table"},
+		"the sum with another":     {Measures: []string{"sum", "p50"}, Shape: "table"},
+		"no measure":               {Measures: []string{}, Shape: "table"},
+		"a measure that isn't one": {Measures: []string{"mean"}, Shape: "table"},
+	} {
+		p.AppID, p.Title, p.Event, p.Filter, p.MaxViews = "alpha", "v", "vpn.connect", []byte("{}"), maxViews
+		if _, err := db.New(pool).CreateView(context.Background(), p); err == nil {
+			t.Errorf("stored %s", name)
+		}
 	}
 }

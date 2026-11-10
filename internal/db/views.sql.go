@@ -13,8 +13,8 @@ import (
 )
 
 const createView = `-- name: CreateView :one
-INSERT INTO app_views (app_id, title, event, agg, group_by, filter, shape)
-SELECT $1, $2, $3, $4, $5, $6, $7
+INSERT INTO app_views (app_id, title, event, measures, group_by, filter, shape)
+SELECT $1, $2, $3, $4::text[], $5, $6, $7
 WHERE (SELECT count(*) FROM app_views v WHERE v.app_id = $1) < $8::bigint
 RETURNING id
 `
@@ -23,7 +23,7 @@ type CreateViewParams struct {
 	AppID    string
 	Title    string
 	Event    string
-	Agg      string
+	Measures []string
 	GroupBy  string
 	Filter   []byte
 	Shape    string
@@ -36,7 +36,7 @@ func (q *Queries) CreateView(ctx context.Context, arg CreateViewParams) (int64, 
 		arg.AppID,
 		arg.Title,
 		arg.Event,
-		arg.Agg,
+		arg.Measures,
 		arg.GroupBy,
 		arg.Filter,
 		arg.Shape,
@@ -65,7 +65,7 @@ func (q *Queries) DeleteView(ctx context.Context, arg DeleteViewParams) (int64, 
 }
 
 const getView = `-- name: GetView :one
-SELECT id, app_id, title, event, agg, group_by, filter, created_at, shape FROM app_views WHERE app_id = $1 AND id = $2
+SELECT id, app_id, title, event, group_by, filter, created_at, shape, measures FROM app_views WHERE app_id = $1 AND id = $2
 `
 
 type GetViewParams struct {
@@ -81,17 +81,17 @@ func (q *Queries) GetView(ctx context.Context, arg GetViewParams) (AppView, erro
 		&i.AppID,
 		&i.Title,
 		&i.Event,
-		&i.Agg,
 		&i.GroupBy,
 		&i.Filter,
 		&i.CreatedAt,
 		&i.Shape,
+		&i.Measures,
 	)
 	return i, err
 }
 
 const listViews = `-- name: ListViews :many
-SELECT id, app_id, title, event, agg, group_by, filter, created_at, shape FROM app_views WHERE app_id = $1 ORDER BY id
+SELECT id, app_id, title, event, group_by, filter, created_at, shape, measures FROM app_views WHERE app_id = $1 ORDER BY id
 `
 
 func (q *Queries) ListViews(ctx context.Context, appID string) ([]AppView, error) {
@@ -108,11 +108,11 @@ func (q *Queries) ListViews(ctx context.Context, appID string) ([]AppView, error
 			&i.AppID,
 			&i.Title,
 			&i.Event,
-			&i.Agg,
 			&i.GroupBy,
 			&i.Filter,
 			&i.CreatedAt,
 			&i.Shape,
+			&i.Measures,
 		); err != nil {
 			return nil, err
 		}
@@ -126,26 +126,26 @@ func (q *Queries) ListViews(ctx context.Context, appID string) ([]AppView, error
 
 const updateView = `-- name: UpdateView :execrows
 UPDATE app_views
-SET title = $1, event = $2, agg = $3, group_by = $4, filter = $5, shape = $6
+SET title = $1, event = $2, measures = $3::text[], group_by = $4, filter = $5, shape = $6
 WHERE app_id = $7 AND id = $8
 `
 
 type UpdateViewParams struct {
-	Title   string
-	Event   string
-	Agg     string
-	GroupBy string
-	Filter  []byte
-	Shape   string
-	AppID   string
-	ID      int64
+	Title    string
+	Event    string
+	Measures []string
+	GroupBy  string
+	Filter   []byte
+	Shape    string
+	AppID    string
+	ID       int64
 }
 
 func (q *Queries) UpdateView(ctx context.Context, arg UpdateViewParams) (int64, error) {
 	result, err := q.db.Exec(ctx, updateView,
 		arg.Title,
 		arg.Event,
-		arg.Agg,
+		arg.Measures,
 		arg.GroupBy,
 		arg.Filter,
 		arg.Shape,
