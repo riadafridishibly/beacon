@@ -57,6 +57,7 @@ type overviewView struct {
 
 	TopErrors []db.OverviewTopErrorsRow
 	Breakdown []breakdownView
+	Views     []viewCard
 }
 
 type breakdownView struct {
@@ -122,6 +123,10 @@ func (d *dashboard) loadOverview(ctx context.Context, appID, rng string) (overvi
 			bv.Top = rows[0].Devices
 		}
 		v.Breakdown = append(v.Breakdown, bv)
+	}
+	v.Views, err = d.loadViewCards(ctx, appID, since, until, days)
+	if err != nil {
+		return overviewView{}, fmt.Errorf("views: %w", err)
 	}
 	return v, nil
 }

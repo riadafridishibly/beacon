@@ -40,6 +40,11 @@ const (
 
 var namePattern = regexp.MustCompile(`^[a-z0-9_]+(\.[a-z0-9_]+)*$`)
 
+// ValidName reports whether POST /v1/events accepts name as an event name.
+func ValidName(name string) bool {
+	return len(name) <= maxNameLen && namePattern.MatchString(name)
+}
+
 // Batch is the request body. Fields set in Context apply to every event
 // that doesn't set them itself.
 type Batch struct {
@@ -221,7 +226,7 @@ func toRow(appID string, shared Fields, e Event, now time.Time) (db.InsertEvents
 	f.OSVersion = or(f.OSVersion, shared.OSVersion)
 
 	switch {
-	case !namePattern.MatchString(e.Name) || len(e.Name) > maxNameLen:
+	case !ValidName(e.Name):
 		return db.InsertEventsParams{}, fmt.Errorf("name %q must be at most %d lowercase letters, digits and underscores, in dot-separated parts", e.Name, maxNameLen)
 	case f.DeviceID == "":
 		return db.InsertEventsParams{}, errors.New("device_id is required")

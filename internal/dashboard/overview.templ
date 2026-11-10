@@ -28,6 +28,7 @@ templ appHeader(app db.App, current string) {
 		@appTab("Users", subjectsURL(app.ID, userSubject, ""), current == "users")
 		@appTab("Devices", subjectsURL(app.ID, deviceSubject, ""), current == "devices")
 		@appTab("Catalog", catalogURL(app.ID, ""), current == "catalog")
+		@appTab("Views", viewsURL(app.ID), current == "views")
 		@appTab("Keys", "/apps/"+app.ID+"/keys", current == "keys")
 	</nav>
 }
@@ -93,6 +94,13 @@ templ overviewBody(v overviewView) {
 				@breakdown(b)
 			}
 		</div>
+		if len(v.Views) > 0 {
+			<div class="mt-4 grid gap-4 lg:grid-cols-2">
+				for _, c := range v.Views {
+					@viewCardSection(c)
+				}
+			</div>
+		}
 	}
 }
 
