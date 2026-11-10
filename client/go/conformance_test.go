@@ -99,7 +99,8 @@ func TestConformanceBatch(t *testing.T) {
 	srv := newServer(t)
 	cfg := srv.config(t)
 	cfg.AppVersion, cfg.Platform, cfg.OSVersion = "1.4.0", "macos", "15.1"
-	cfg.newID = func() string { return "fixed-id" }
+	ids := 0
+	cfg.newID = func() string { ids++; return fmt.Sprintf("id-%d", ids) }
 	cfg.now = func() time.Time { return time.Date(2026, 11, 8, 11, 59, 0, 0, time.UTC) }
 	cfg.AllowProps = []string{"cold"}
 	c := newClient(t, cfg)

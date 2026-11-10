@@ -129,6 +129,69 @@ func TestIngest(t *testing.T) {
 	}
 }
 
+func TestIngestSkipsResentEvents(t *testing.T) {
+	t.Parallel()
+	pool, h, key := setup(t)
+	otherKey, err := apps.Create(context.Background(), pool, "other", "Other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	send := func(key string, events ...string) {
+		t.Helper()
+		body := `{"context": {"device_id": "d1"}, "events": [` + strings.Join(events, ",") + `]}`
+		rec := post(t, h, key, []byte(body), false)
+		want := `"accepted":` + strconv.Itoa(len(events))
+		if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), want) {
+			t.Fatalf("status %d: %s, want 202 and %s", rec.Code, rec.Body, want)
+		}
+	}
+	a := `{"name": "a", "event_id": "e1", "value": 60}`
+	b := `{"name": "b", "event_id": "e2"}`
+	noID := `{"name": "no_id"}`
+	c := `{"name": "c", "event_id": "e3"}`
+
+	send(key, a, b, noID)
+	send(key, a, b, noID, c, c)
+	send(otherKey, a)
+
+	var got []string
+	rows, err := pool.Query(context.Background(), `SELECT app_id, name, coalesce(event_id, '') FROM events ORDER BY id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var app, name, id string
+		if err := rows.Scan(&app, &name, &id); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, app+"/"+name+"/"+id)
+	}
+	want := []string{"demo/a/e1", "demo/b/e2", "demo/no_id/", "demo/no_id/", "demo/c/e3", "other/a/e1"}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("stored %v, want %v", got, want)
+	}
+}
+
+func TestIngestEventsStoresPlace(t *testing.T) {
+	t.Parallel()
+	pool, _, _ := setup(t)
+	country, city := "DE", "Berlin"
+	if _, err := db.New(pool).IngestEvents(context.Background(), db.IngestEventsParams{
+		AppID: "demo", Country: &country, City: &city,
+		Events: []byte(`[{"name": "a", "ts": "2026-11-08T12:00:00Z", "device_id": "d1"}]`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var gotCountry, gotCity string
+	if err := pool.QueryRow(context.Background(), `SELECT country, city FROM events`).Scan(&gotCountry, &gotCity); err != nil {
+		t.Fatal(err)
+	}
+	if gotCountry != country || gotCity != city {
+		t.Errorf("stored %q %q", gotCountry, gotCity)
+	}
+}
+
 func TestIngestRejects(t *testing.T) {
 	t.Parallel()
 	pool, h, key := setup(t)

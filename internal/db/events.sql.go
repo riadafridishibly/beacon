@@ -11,6 +11,43 @@ import (
 	"time"
 )
 
+const ingestEvents = `-- name: IngestEvents :execrows
+INSERT INTO events (
+    app_id, event_id, name, ts, device_id, user_id, session_id,
+    app_version, platform, os_version, country, city, value, props
+)
+SELECT $1::text, r.event_id, r.name, r.ts, r.device_id, r.user_id, r.session_id,
+       r.app_version, r.platform, r.os_version, $2::text, $3::text,
+       r.value, r.props
+FROM jsonb_to_recordset($4::jsonb) AS r (
+    event_id text, name text, ts timestamptz, device_id text, user_id text, session_id text,
+    app_version text, platform text, os_version text, value float8, props jsonb
+)
+ON CONFLICT (app_id, event_id) WHERE event_id IS NOT NULL DO NOTHING
+`
+
+type IngestEventsParams struct {
+	AppID   string
+	Country *string
+	City    *string
+	Events  []byte
+}
+
+// IngestEvents stores events, given as a JSON array of objects, and skips
+// those whose event_id the app already has.
+func (q *Queries) IngestEvents(ctx context.Context, arg IngestEventsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, ingestEvents,
+		arg.AppID,
+		arg.Country,
+		arg.City,
+		arg.Events,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 type InsertEventsParams struct {
 	AppID      string
 	Name       string
@@ -28,7 +65,7 @@ type InsertEventsParams struct {
 }
 
 const listEvents = `-- name: ListEvents :many
-SELECT id, app_id, name, ts, received_at, device_id, user_id, session_id, app_version, platform, os_version, country, city, value, props
+SELECT id, app_id, name, ts, received_at, device_id, user_id, session_id, app_version, platform, os_version, country, city, value, props, event_id
 FROM events
 WHERE app_id = $1
   AND (ts, id) < ($2::timestamptz, $3::bigint)
@@ -88,6 +125,7 @@ func (q *Queries) ListEvents(ctx context.Context, arg ListEventsParams) ([]Event
 			&i.City,
 			&i.Value,
 			&i.Props,
+			&i.EventID,
 		); err != nil {
 			return nil, err
 		}

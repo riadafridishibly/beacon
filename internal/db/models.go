@@ -59,6 +59,7 @@ type Event struct {
 	City       *string
 	Value      *float64
 	Props      json.RawMessage
+	EventID    *string
 }
 
 type Session struct {
