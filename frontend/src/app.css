@@ -74,17 +74,27 @@
   --noise: 0;
 }
 
-/* Chart series. Blue then orange, validated for color vision deficiency on
-   each theme's card surface. */
+/* Chart series: blue, orange, aqua, yellow, magenta, in this order, validated
+   for color vision deficiency on each theme's card surface. Aqua, yellow and
+   magenta are under 3:1 on the light card, so every chart has a table. Other
+   is a gray that stays behind the series. */
 @theme {
   --color-chart-1: #2a78d6;
   --color-chart-2: #eb6834;
+  --color-chart-3: #1baf7a;
+  --color-chart-4: #eda100;
+  --color-chart-5: #e87ba4;
+  --color-chart-other: #8a9099;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
     --color-chart-1: #3987e5;
     --color-chart-2: #d95926;
+    --color-chart-3: #199e70;
+    --color-chart-4: #c98500;
+    --color-chart-5: #d55181;
+    --color-chart-other: #7d848e;
   }
 }
 

@@ -3,6 +3,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -95,8 +96,9 @@ func addViews(ctx context.Context, q *db.Queries) error {
 		{Title: "Export time by format", Event: "export.finished", Agg: "p95", GroupBy: "props.format"},
 		{Title: "Screen views", Event: "screen.view", Agg: "count", GroupBy: "props.screen"},
 		{Title: "PDF exports per day", Event: "export.finished", Agg: "count", Filter: []byte(`{"props.format": "pdf"}`)},
+		{Title: "Screen views per day", Event: "screen.view", Agg: "count", GroupBy: "props.screen", Shape: "line"},
 	} {
-		v.AppID, v.MaxViews = appID, 100
+		v.AppID, v.MaxViews, v.Shape = appID, 100, cmp.Or(v.Shape, "table")
 		if v.Filter == nil {
 			v.Filter = []byte("{}")
 		}

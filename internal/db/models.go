@@ -40,6 +40,7 @@ type AppView struct {
 	GroupBy   string
 	Filter    []byte
 	CreatedAt time.Time
+	Shape     string
 }
 
 type Event struct {

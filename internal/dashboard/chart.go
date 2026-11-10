@@ -42,17 +42,28 @@ const (
 
 // series is one line or set of columns. Stroke and Fill are Tailwind classes
 // written out in full so the stylesheet build finds them. A nil value is a
-// day with nothing to plot.
+// day with nothing to plot. FullName is set when Name is shortened.
 type series struct {
-	Name   string
-	Stroke string
-	Fill   string
-	Values []*float64
+	Name     string
+	FullName string
+	Stroke   string
+	Fill     string
+	Values   []*float64
 }
 
 var (
 	slot1 = series{Stroke: "stroke-chart-1", Fill: "fill-chart-1"}
 	slot2 = series{Stroke: "stroke-chart-2", Fill: "fill-chart-2"}
+	// slots are in the order the palette was validated in, so adjacent series
+	// stay distinct with color vision deficiency.
+	slots = []series{
+		slot1, slot2,
+		{Stroke: "stroke-chart-3", Fill: "fill-chart-3"},
+		{Stroke: "stroke-chart-4", Fill: "fill-chart-4"},
+		{Stroke: "stroke-chart-5", Fill: "fill-chart-5"},
+	}
+	// slotOther is a gray for a series that pools the rest.
+	slotOther = series{Stroke: "stroke-chart-other", Fill: "fill-chart-other"}
 )
 
 // valueFormat says how a chart's values read on its axis and in its tooltip.
