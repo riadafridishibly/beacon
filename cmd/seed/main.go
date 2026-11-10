@@ -93,10 +93,11 @@ func seed(ctx context.Context, pool *pgxpool.Pool, now time.Time) (int64, error)
 // addViews adds one view of each kind the overview draws.
 func addViews(ctx context.Context, q *db.Queries) error {
 	for _, v := range []db.CreateViewParams{
-		{Title: "Export time by format", Event: "export.finished", Agg: "p95", GroupBy: "props.format"},
-		{Title: "Screen views", Event: "screen.view", Agg: "count", GroupBy: "props.screen"},
-		{Title: "PDF exports per day", Event: "export.finished", Agg: "count", Filter: []byte(`{"props.format": "pdf"}`)},
-		{Title: "Screen views per day", Event: "screen.view", Agg: "count", GroupBy: "props.screen", Shape: "line"},
+		{Title: "Export time by format", Event: "export.finished", Measures: []string{"p95"}, GroupBy: "props.format"},
+		{Title: "Screen views", Event: "screen.view", Measures: []string{"count", "distinct_devices"}, GroupBy: "props.screen"},
+		{Title: "PDF exports per day", Event: "export.finished", Measures: []string{"count"}, Filter: []byte(`{"props.format": "pdf"}`)},
+		{Title: "Export time", Event: "export.finished", Measures: []string{"p50", "p95"}},
+		{Title: "Screen views per day", Event: "screen.view", Measures: []string{"count"}, GroupBy: "props.screen", Shape: "line"},
 	} {
 		v.AppID, v.MaxViews, v.Shape = appID, 100, cmp.Or(v.Shape, "table")
 		if v.Filter == nil {

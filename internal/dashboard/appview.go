@@ -37,21 +37,68 @@ const (
 
 type option struct{ ID, Label string }
 
-var aggregates = []option{
-	{"count", "Events"},
-	{"distinct_devices", "Devices"},
-	{"sum", "Sum of value"},
-	{"p50", "p50 of value"},
-	{"p95", "p95 of value"},
+// measure is something a view can show. A view shows measures of one
+// family together, since they share a unit and an axis.
+type measure struct {
+	ID, Name, Family string
+	// OfValue marks a measure computed from the events' values.
+	OfValue bool
 }
 
-func aggLabel(id string) string {
-	for _, a := range aggregates {
-		if a.ID == id {
-			return a.Label
+// measures are in the order a view lists them. The sum grows with traffic,
+// so it has a family of its own.
+var measures = []measure{
+	{ID: "count", Name: "Events", Family: "counts"},
+	{ID: "distinct_devices", Name: "Devices", Family: "counts"},
+	{ID: "sum", Name: "Sum", Family: "sum", OfValue: true},
+	{ID: "p50", Name: "p50", Family: "percentiles", OfValue: true},
+	{ID: "p95", Name: "p95", Family: "percentiles", OfValue: true},
+}
+
+func measureByID(id string) measure {
+	i := slices.IndexFunc(measures, func(m measure) bool { return m.ID == id })
+	if i < 0 {
+		return measure{ID: id, Name: id}
+	}
+	return measures[i]
+}
+
+// describeMeasures names measures from one family, such as "p50 and p95 of
+// value".
+func describeMeasures(ids []string) string {
+	names := make([]string, len(ids))
+	for i, id := range ids {
+		names[i] = measureByID(id).Name
+		if i > 0 {
+			names[i] = strings.ToLower(names[i])
 		}
 	}
-	return id
+	s := strings.Join(names, " and ")
+	if len(ids) > 0 && measureByID(ids[0]).OfValue {
+		s += " of value"
+	}
+	return s
+}
+
+// parseMeasures checks the measures picked in the form and returns the known
+// ones in the order of measures, so the form keeps them on an error.
+func parseMeasures(picked []string) ([]string, string) {
+	var ids []string
+	families := map[string]bool{}
+	for _, m := range measures {
+		if slices.Contains(picked, m.ID) {
+			ids = append(ids, m.ID)
+			families[m.Family] = true
+		}
+	}
+	unknown := slices.ContainsFunc(picked, func(id string) bool { return !slices.Contains(ids, id) })
+	switch {
+	case len(ids) == 0 || unknown:
+		return ids, "Choose a measure."
+	case len(families) > 1:
+		return ids, "Combine events with devices, or p50 with p95. The sum goes alone."
+	}
+	return ids, ""
 }
 
 var shapes = []option{
@@ -178,7 +225,7 @@ func newViewQuery(v db.AppView) (viewQuery, error) {
 
 // describeView is a view's definition in one line.
 func describeView(v db.AppView) string {
-	parts := []string{v.Event, aggLabel(v.Agg)}
+	parts := []string{v.Event, describeMeasures(v.Measures)}
 	if v.GroupBy != "" {
 		parts[1] += " by " + v.GroupBy
 	}
@@ -196,10 +243,10 @@ func describeView(v db.AppView) string {
 	return strings.Join(parts, " · ")
 }
 
-// aggValue is the measure a view shows, or nil when it is a measure of value
+// measureValue is a measure of a row, or nil when it is a measure of value
 // and no event had one.
-func aggValue(agg string, events, devices, withValue int64, total, p50, p95 float64) *float64 {
-	switch agg {
+func measureValue(id string, events, devices, withValue int64, total, p50, p95 float64) *float64 {
+	switch id {
 	case "count":
 		return count(events)
 	case "distinct_devices":
@@ -208,7 +255,7 @@ func aggValue(agg string, events, devices, withValue int64, total, p50, p95 floa
 	if withValue == 0 {
 		return nil
 	}
-	switch agg {
+	switch id {
 	case "sum":
 		return finite(total)
 	case "p50":
@@ -229,12 +276,18 @@ type viewCard struct {
 	Failed  bool
 }
 
+// viewGroups is a grouped table, sorted by the last of Measures: devices
+// over events, and the tail over the median.
 type viewGroups struct {
-	Field  string
-	Agg    string
-	Values bool
-	Rows   []db.ViewGroupsRow
+	Field    string
+	Measures []string
+	Values   bool
+	Rows     []db.ViewGroupsRow
 }
+
+func (g *viewGroups) shows(id string) bool { return slices.Contains(g.Measures, id) }
+
+func (g *viewGroups) sortedBy(id string) bool { return g.Measures[len(g.Measures)-1] == id }
 
 // loadViewCards gives a view that fails its own error card, so one view
 // can't break the overview. A timeout still fails the page.
@@ -306,16 +359,23 @@ func viewChart(v db.AppView, days []time.Time, rows []db.ViewDailyRow) chartView
 	for _, r := range rows {
 		byDay[dayKey(r.Day.Time)] = r
 	}
-	values := make([]*float64, len(days))
+	perDay := make([]db.ViewDailyRow, len(days))
 	for i, day := range days {
-		r := byDay[dayKey(day)]
-		values[i] = aggValue(v.Agg, r.Events, r.Devices, r.WithValue, r.Total, r.P50, r.P95)
+		perDay[i] = byDay[dayKey(day)]
+	}
+	lines := make([]series, len(v.Measures))
+	for i, id := range v.Measures {
+		values := make([]*float64, len(days))
+		for j, r := range perDay {
+			values[j] = measureValue(id, r.Events, r.Devices, r.WithValue, r.Total, r.P50, r.P95)
+		}
+		lines[i] = withValues(slots[i], measureByID(id).Name, values)
 	}
 	kind := columnChart
-	if v.Agg == "p50" || v.Agg == "p95" {
+	if len(lines) > 1 || measureByID(v.Measures[0]).Family == "percentiles" {
 		kind = lineChart
 	}
-	return layout(viewChartData(v, days, kind, []series{withValues(slot1, aggLabel(v.Agg), values)}))
+	return layout(viewChartData(v, days, kind, lines))
 }
 
 // viewChartData is the chart of a view's series. A measure of value plots
@@ -330,18 +390,18 @@ func viewChartData(v db.AppView, days []time.Time, kind chartKind, s []series) c
 		Format: countFormat,
 		Series: s,
 	}
-	switch v.Agg {
-	case "sum", "p50", "p95":
+	if measureByID(v.Measures[0]).OfValue {
 		c.Format, c.PlotZeros = numberFormat, true
 		c.Empty = "No matching " + v.Event + " events with a value in this range."
 	}
 	return c
 }
 
-// groupLines draws a line per group. The rows come grouped, with Other
-// last. A group's day without events counts 0, and its value measures have
-// nothing to plot.
+// groupLines draws a line per group of the view's one measure. The rows come
+// grouped, with Other last. A group's day without events counts 0, and its
+// value measures have nothing to plot.
 func groupLines(v db.AppView, days []time.Time, rows []db.ViewGroupsDailyRow) chartView {
+	m := v.Measures[0]
 	index := make(map[string]int, len(days))
 	for i, day := range days {
 		index[dayKey(day)] = i
@@ -357,13 +417,13 @@ func groupLines(v db.AppView, days []time.Time, rows []db.ViewGroupsDailyRow) ch
 			s.Name, s.FullName, s.Placeholder = seriesName(r.Label, r.Other)
 			s.Values = make([]*float64, len(days))
 			for j := range s.Values {
-				s.Values[j] = aggValue(v.Agg, 0, 0, 0, 0, 0, 0)
+				s.Values[j] = measureValue(m, 0, 0, 0, 0, 0, 0)
 			}
 			lines = append(lines, s)
 			other = other || r.Other
 		}
 		if j, ok := index[dayKey(r.Day.Time)]; ok {
-			lines[len(lines)-1].Values[j] = aggValue(v.Agg, r.Events, r.Devices, r.WithValue, r.Total, r.P50, r.P95)
+			lines[len(lines)-1].Values[j] = measureValue(m, r.Events, r.Devices, r.WithValue, r.Total, r.P50, r.P95)
 		}
 	}
 	c := viewChartData(v, days, lineChart, lines)
@@ -389,17 +449,18 @@ func seriesName(label string, other bool) (name, full string, placeholder bool) 
 	return string([]rune(label)[:maxSeriesName-1]) + "…", label, false
 }
 
-// groupsFor orders the groups by the view's measure. Ties keep the query's
-// order, by count.
+// groupsFor orders the groups by the view's last measure. Ties keep the
+// query's order, by count.
 func groupsFor(v db.AppView, rows []db.ViewGroupsRow) *viewGroups {
+	sortBy := v.Measures[len(v.Measures)-1]
 	key := func(r db.ViewGroupsRow) float64 {
-		if p := aggValue(v.Agg, r.Events, r.Devices, r.WithValue, r.Total, r.P50, r.P95); p != nil {
+		if p := measureValue(sortBy, r.Events, r.Devices, r.WithValue, r.Total, r.P50, r.P95); p != nil {
 			return *p
 		}
 		return math.Inf(-1)
 	}
 	slices.SortStableFunc(rows, func(a, b db.ViewGroupsRow) int { return cmp.Compare(key(b), key(a)) })
-	g := &viewGroups{Field: v.GroupBy, Agg: v.Agg, Rows: rows}
+	g := &viewGroups{Field: v.GroupBy, Measures: v.Measures, Rows: rows}
 	g.Values = slices.ContainsFunc(rows, func(r db.ViewGroupsRow) bool { return r.WithValue > 0 })
 	return g
 }
@@ -413,12 +474,13 @@ func viewURL(appID string, id int64) string {
 // viewForm is the view editor. ID is zero for a new view. Events and Fields
 // are suggestions from what the app has sent.
 type viewForm struct {
-	ID                                        int64
-	Title, Event, Agg, GroupBy, Filter, Shape string
-	TitleError, EventError, AggError          string
-	GroupByError, FilterError, ShapeError     string
-	FormError                                 string
-	Events, Fields                            []string
+	ID                                    int64
+	Title, Event, GroupBy, Filter, Shape  string
+	Measures                              []string
+	TitleError, EventError, MeasureError  string
+	GroupByError, FilterError, ShapeError string
+	FormError                             string
+	Events, Fields                        []string
 }
 
 func (f viewForm) action(appID string) string {
@@ -441,9 +503,7 @@ func (f *viewForm) validate() []byte {
 	if !ingest.ValidName(f.Event) {
 		f.EventError = "Use an event name, such as vpn.connect."
 	}
-	if !slices.ContainsFunc(aggregates, func(a option) bool { return a.ID == f.Agg }) {
-		f.AggError = "Choose a measure."
-	}
+	f.Measures, f.MeasureError = parseMeasures(f.Measures)
 	if f.GroupBy != "" {
 		if _, _, ok := parseField(f.GroupBy); !ok {
 			f.GroupByError = "Use platform, app_version, country or props.<key>."
@@ -457,13 +517,16 @@ func (f *viewForm) validate() []byte {
 	if f.GroupBy == "" {
 		f.Shape = "table"
 	}
+	if f.Shape == "line" && len(f.Measures) > 1 && f.MeasureError == "" {
+		f.MeasureError = "Lines by day show one measure, since each group has its own line."
+	}
 	filter, msg := parseFilter(f.Filter)
 	f.FilterError = msg
 	return filter
 }
 
 func (f viewForm) valid() bool {
-	return f.TitleError == "" && f.EventError == "" && f.AggError == "" &&
+	return f.TitleError == "" && f.EventError == "" && f.MeasureError == "" &&
 		f.GroupByError == "" && f.FilterError == "" && f.ShapeError == ""
 }
 
@@ -522,7 +585,7 @@ func (d *dashboard) newView(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	f := viewForm{Agg: "count", Shape: "table"}
+	f := viewForm{Measures: []string{"count"}, Shape: "table"}
 	if err := d.suggest(r.Context(), app.ID, &f); err != nil {
 		return err
 	}
@@ -538,7 +601,7 @@ func (d *dashboard) editView(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	f := viewForm{ID: v.ID, Title: v.Title, Event: v.Event, Agg: v.Agg, GroupBy: v.GroupBy, Shape: v.Shape}
+	f := viewForm{ID: v.ID, Title: v.Title, Event: v.Event, Measures: v.Measures, GroupBy: v.GroupBy, Shape: v.Shape}
 	if string(v.Filter) != "{}" {
 		f.Filter = string(v.Filter)
 	}
@@ -558,11 +621,11 @@ func (d *dashboard) saveView(w http.ResponseWriter, r *http.Request) error {
 	f := viewForm{
 		Title:   strings.TrimSpace(r.PostFormValue("title")),
 		Event:   strings.TrimSpace(r.PostFormValue("event")),
-		Agg:     r.PostFormValue("agg"),
 		GroupBy: strings.TrimSpace(r.PostFormValue("group_by")),
 		Filter:  strings.TrimSpace(r.PostFormValue("filter")),
 		Shape:   cmp.Or(r.PostFormValue("shape"), "table"),
 	}
+	f.Measures = r.PostForm["measure"]
 	if id := r.PathValue("view"); id != "" {
 		v, err := d.view(ctx, app.ID, id)
 		if err != nil {
@@ -591,7 +654,7 @@ func (d *dashboard) saveView(w http.ResponseWriter, r *http.Request) error {
 func (d *dashboard) storeView(ctx context.Context, appID string, f *viewForm, filter []byte) (bool, error) {
 	if f.ID == 0 {
 		_, err := d.q.CreateView(ctx, db.CreateViewParams{
-			AppID: appID, Title: f.Title, Event: f.Event, Agg: f.Agg, GroupBy: f.GroupBy,
+			AppID: appID, Title: f.Title, Event: f.Event, Measures: f.Measures, GroupBy: f.GroupBy,
 			Filter: filter, Shape: f.Shape, MaxViews: maxViews,
 		})
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -601,7 +664,7 @@ func (d *dashboard) storeView(ctx context.Context, appID string, f *viewForm, fi
 		return err == nil, err
 	}
 	n, err := d.q.UpdateView(ctx, db.UpdateViewParams{
-		AppID: appID, ID: f.ID, Title: f.Title, Event: f.Event, Agg: f.Agg, GroupBy: f.GroupBy,
+		AppID: appID, ID: f.ID, Title: f.Title, Event: f.Event, Measures: f.Measures, GroupBy: f.GroupBy,
 		Filter: filter, Shape: f.Shape,
 	})
 	if err == nil && n == 0 {

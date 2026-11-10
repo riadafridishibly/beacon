@@ -6,14 +6,14 @@ SELECT * FROM app_views WHERE app_id = @app_id AND id = @id;
 
 -- Returns no row when the app already has max_views views.
 -- name: CreateView :one
-INSERT INTO app_views (app_id, title, event, agg, group_by, filter, shape)
-SELECT @app_id, @title, @event, @agg, @group_by, @filter, @shape
+INSERT INTO app_views (app_id, title, event, measures, group_by, filter, shape)
+SELECT @app_id, @title, @event, @measures::text[], @group_by, @filter, @shape
 WHERE (SELECT count(*) FROM app_views v WHERE v.app_id = @app_id) < @max_views::bigint
 RETURNING id;
 
 -- name: UpdateView :execrows
 UPDATE app_views
-SET title = @title, event = @event, agg = @agg, group_by = @group_by, filter = @filter, shape = @shape
+SET title = @title, event = @event, measures = @measures::text[], group_by = @group_by, filter = @filter, shape = @shape
 WHERE app_id = @app_id AND id = @id;
 
 -- name: DeleteView :execrows
