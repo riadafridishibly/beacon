@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/http"
@@ -108,7 +109,7 @@ func seedViews(t *testing.T, pool *pgxpool.Pool) {
 
 func createView(t *testing.T, pool *pgxpool.Pool, p db.CreateViewParams) {
 	t.Helper()
-	p.AppID, p.MaxViews = "alpha", maxViews
+	p.AppID, p.MaxViews, p.Shape = "alpha", maxViews, cmp.Or(p.Shape, "table")
 	if p.Filter == nil {
 		p.Filter = []byte("{}")
 	}
@@ -204,16 +205,38 @@ func TestViewEditor(t *testing.T) {
 		t.Error("overview misses the view")
 	}
 
-	bad := url.Values{"title": {""}, "event": {"Bad Name"}, "agg": {"mean"}, "group_by": {"city"}, "filter": {"[1]"}}
+	bad := url.Values{"title": {""}, "event": {"Bad Name"}, "agg": {"mean"}, "group_by": {"city"}, "filter": {"[1]"}, "shape": {"pie"}}
 	w = c.do(http.MethodPost, path, bad)
 	if w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("invalid update: %d", w.Code)
 	}
-	for _, msg := range []string{"Enter a title.", "Use an event name", "Choose a measure.", "Use platform, app_version", "Use a JSON object"} {
+	for _, msg := range []string{"Enter a title.", "Use an event name", "Choose a measure.", "Use platform, app_version", "Use a JSON object", "Choose a table or lines."} {
 		if !strings.Contains(w.Body.String(), msg) {
 			t.Errorf("invalid update misses %q", msg)
 		}
 	}
+	ungrouped := url.Values{"title": {"Lines"}, "event": {"vpn.connect"}, "agg": {"count"}, "shape": {"line"}}
+	if w := c.do(http.MethodPost, path, ungrouped); w.Code != http.StatusSeeOther {
+		t.Fatalf("lines without a group: %d", w.Code)
+	}
+	if v, err := db.New(pool).GetView(context.Background(), db.GetViewParams{AppID: "alpha", ID: id}); err != nil || v.Shape != "table" {
+		t.Errorf("lines without a group stored %+v, %v", v, err)
+	}
+
+	form.Set("shape", "line")
+	if w := c.do(http.MethodPost, path, form); w.Code != http.StatusSeeOther {
+		t.Fatalf("update to lines: %d", w.Code)
+	}
+	if w := c.do(http.MethodGet, path, nil); !strings.Contains(w.Body.String(), `<option value="line" selected>`) {
+		t.Error("edit form misses the stored shape")
+	}
+	// The tooltip names groups only on a line chart, and the table titles
+	// them only in a table.
+	if body := c.do(http.MethodGet, "/apps/alpha", nil).Body.String(); !strings.Contains(body, `<tspan class="fill-base-content/60">fra</tspan>`) ||
+		strings.Contains(body, `title="fra"`) {
+		t.Error("overview misses the lines")
+	}
+	form.Del("shape")
 
 	form.Set("title", "Connect p50")
 	form.Set("agg", "p50")
@@ -222,7 +245,7 @@ func TestViewEditor(t *testing.T) {
 		t.Fatalf("update: %d", w.Code)
 	}
 	v, err := db.New(pool).GetView(context.Background(), db.GetViewParams{AppID: "alpha", ID: id})
-	if err != nil || v.Title != "Connect p50" || v.Agg != "p50" || string(v.Filter) != "{}" {
+	if err != nil || v.Title != "Connect p50" || v.Agg != "p50" || string(v.Filter) != "{}" || v.Shape != "table" {
 		t.Errorf("updated = %+v, %v", v, err)
 	}
 
@@ -262,5 +285,110 @@ func TestViewLimit(t *testing.T) {
 	}
 	if body := c.do(http.MethodGet, "/apps/alpha/views", nil).Body.String(); strings.Contains(body, "New view") {
 		t.Error("full list still offers New view")
+	}
+}
+
+func TestViewLines(t *testing.T) {
+	t.Parallel()
+	pool := testdb.New(t)
+	if _, err := apps.Create(context.Background(), pool, "alpha", "Alpha"); err != nil {
+		t.Fatal(err)
+	}
+	long := strings.Repeat("x", 40)
+	// Group i has 8-i events today; a and long also have one yesterday.
+	var rows []db.InsertEventsParams
+	for i, server := range []string{"a", "b", "c", long, "", "f", "g"} {
+		for j := range 8 - i {
+			rows = append(rows, db.InsertEventsParams{
+				AppID: "alpha", Name: "vpn.connect", DeviceID: "d", Ts: now.Add(-time.Duration(j) * time.Minute),
+				Value: fp(float64(10 * (i + 1))), Props: props(t, map[string]any{"server": server}),
+			})
+		}
+		if server == "a" || server == long {
+			rows = append(rows, db.InsertEventsParams{
+				AppID: "alpha", Name: "vpn.connect", DeviceID: "d", Ts: now.Add(-24 * time.Hour),
+				Value: fp(1), Props: props(t, map[string]any{"server": server}),
+			})
+		}
+	}
+	if _, err := db.New(pool).InsertEvents(context.Background(), rows); err != nil {
+		t.Fatal(err)
+	}
+	createView(t, pool, db.CreateViewParams{Title: "Count", Event: "vpn.connect", Agg: "count", GroupBy: "props.server", Shape: "line"})
+	createView(t, pool, db.CreateViewParams{Title: "p95", Event: "vpn.connect", Agg: "p95", GroupBy: "props.server", Shape: "line"})
+	d := &dashboard{pool: pool, q: db.New(pool), nowFunc: func() time.Time { return now }}
+
+	v, err := d.loadOverview(context.Background(), "alpha", "7d")
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := v.Views[0].Chart
+	if v.Views[0].Groups != nil || count.Kind != lineChart {
+		t.Fatalf("count = %+v", v.Views[0])
+	}
+	type line struct {
+		name, full, stroke string
+		yesterday, today   any
+	}
+	val := func(p *float64) any {
+		if p == nil {
+			return nil
+		}
+		return *p
+	}
+	var got []line
+	for _, s := range count.Series {
+		got = append(got, line{s.Name, s.FullName, s.Stroke, val(s.Values[5]), val(s.Values[6])})
+	}
+	want := []line{
+		{"a", "", "stroke-chart-1", 1.0, 8.0},
+		{"b", "", "stroke-chart-2", 0.0, 7.0},
+		{"c", "", "stroke-chart-3", 0.0, 6.0},
+		{strings.Repeat("x", maxSeriesName-1) + "…", long, "stroke-chart-4", 1.0, 5.0},
+		{"Unknown", "", "stroke-chart-5", 0.0, 4.0},
+		{"Other", "", "stroke-chart-other", 0.0, 5.0},
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("lines =\n%v\nwant\n%v", got, want)
+	}
+	if !strings.HasSuffix(count.Note, "per day · Other pools the remaining groups") {
+		t.Errorf("note = %q", count.Note)
+	}
+	var placeholders []string
+	for _, s := range count.Series {
+		if s.Placeholder {
+			placeholders = append(placeholders, s.Name)
+		}
+	}
+	if fmt.Sprint(placeholders) != "[Unknown Other]" {
+		t.Errorf("placeholders = %v", placeholders)
+	}
+	if first := count.Lines[0].Series.Name; first != "Other" || len(count.Lines) != 6 {
+		t.Errorf("drawn first: %q of %d lines", first, len(count.Lines))
+	}
+	if !count.Legend {
+		t.Error("grouped lines have no legend")
+	}
+
+	p95 := v.Views[1].Chart
+	if b := p95.Series[1]; b.Values[5] != nil || b.Values[6] == nil || *b.Values[6] != 20 {
+		t.Errorf("p95 of b = %v, %v", val(b.Values[5]), val(b.Values[6]))
+	}
+	if other := p95.Series[5]; other.Values[6] == nil || *other.Values[6] != 70 {
+		t.Errorf("p95 of Other = %v", val(other.Values[6]))
+	}
+}
+
+func TestLineNeedsGroup(t *testing.T) {
+	t.Parallel()
+	pool := testdb.New(t)
+	if _, err := apps.Create(context.Background(), pool, "alpha", "Alpha"); err != nil {
+		t.Fatal(err)
+	}
+	_, err := db.New(pool).CreateView(context.Background(), db.CreateViewParams{
+		AppID: "alpha", Title: "v", Event: "vpn.connect", Agg: "count", Filter: []byte("{}"), Shape: "line", MaxViews: maxViews,
+	})
+	if err == nil {
+		t.Error("stored lines without a group")
 	}
 }

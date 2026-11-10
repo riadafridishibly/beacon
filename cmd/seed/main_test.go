@@ -124,7 +124,7 @@ func TestSeedReplacesOnlyItsOwnApp(t *testing.T) {
 	if len(keys) != 2 || keys[0].RevokedAt != nil || keys[1].RevokedAt == nil {
 		t.Errorf("keys = %+v, want one active and one revoked", keys)
 	}
-	if views, err := q.ListViews(ctx, appID); err != nil || len(views) != 3 {
+	if views, err := q.ListViews(ctx, appID); err != nil || len(views) != 4 {
 		t.Errorf("views = %d, %v", len(views), err)
 	}
 }

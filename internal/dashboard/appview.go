@@ -28,14 +28,16 @@ const (
 	// maxViews bounds the queries the overview runs.
 	maxViews       = 20
 	viewGroupLimit = 20
+	viewLineLimit  = 5
+	maxSeriesName  = 24
 	maxTitleLen    = 100
 	maxPropKeyLen  = 100
 	maxFilterLen   = 2000
 )
 
-type aggregate struct{ ID, Label string }
+type option struct{ ID, Label string }
 
-var aggregates = []aggregate{
+var aggregates = []option{
 	{"count", "Events"},
 	{"distinct_devices", "Devices"},
 	{"sum", "Sum of value"},
@@ -50,6 +52,11 @@ func aggLabel(id string) string {
 		}
 	}
 	return id
+}
+
+var shapes = []option{
+	{"table", "Table"},
+	{"line", "Lines by day"},
 }
 
 var viewColumns = []string{"platform", "app_version", "country"}
@@ -175,6 +182,9 @@ func describeView(v db.AppView) string {
 	if v.GroupBy != "" {
 		parts[1] += " by " + v.GroupBy
 	}
+	if v.Shape == "line" {
+		parts[1] += " per day"
+	}
 	var filter map[string]json.RawMessage
 	if json.Unmarshal(v.Filter, &filter) == nil && len(filter) > 0 {
 		var conds []string
@@ -207,9 +217,9 @@ func aggValue(agg string, events, devices, withValue int64, total, p50, p95 floa
 	return finite(p95)
 }
 
-// viewCard is a view computed over the overview's range. Chart is set for a
-// view without group_by, Groups otherwise. Failed is set instead when the
-// view couldn't be computed.
+// viewCard is a view computed over the overview's range. Groups is set for a
+// grouped table, Chart otherwise. Failed is set instead when the view
+// couldn't be computed.
 type viewCard struct {
 	ID      int64
 	Title   string
@@ -265,6 +275,19 @@ func (d *dashboard) viewCard(ctx context.Context, v db.AppView, since, until tim
 		c.Chart = viewChart(v, days, rows)
 		return c, nil
 	}
+	if v.Shape == "line" {
+		rows, err := d.q.ViewGroupsDaily(ctx, db.ViewGroupsDailyParams{
+			AppID: v.AppID, Name: v.Event, Since: since, Until: until,
+			Dimension: q.Dimension, PropKey: q.PropKey,
+			PropsFilter: q.PropsFilter, Platform: q.Platform, AppVersion: q.AppVersion, Country: q.Country,
+			GroupLimit: viewLineLimit,
+		})
+		if err != nil {
+			return viewCard{}, err
+		}
+		c.Chart = groupLines(v, days, rows)
+		return c, nil
+	}
 	rows, err := d.q.ViewGroups(ctx, db.ViewGroupsParams{
 		AppID: v.AppID, Name: v.Event, Since: since, Until: until,
 		Dimension: q.Dimension, PropKey: q.PropKey,
@@ -288,22 +311,82 @@ func viewChart(v db.AppView, days []time.Time, rows []db.ViewDailyRow) chartView
 		r := byDay[dayKey(day)]
 		values[i] = aggValue(v.Agg, r.Events, r.Devices, r.WithValue, r.Total, r.P50, r.P95)
 	}
+	kind := columnChart
+	if v.Agg == "p50" || v.Agg == "p95" {
+		kind = lineChart
+	}
+	return layout(viewChartData(v, days, kind, []series{withValues(slot1, aggLabel(v.Agg), values)}))
+}
+
+// viewChartData is the chart of a view's series. A measure of value plots
+// zeros, since a zero there is what the app sent.
+func viewChartData(v db.AppView, days []time.Time, kind chartKind, s []series) chartData {
 	c := chartData{
-		Title: v.Title,
-		Note:  describeView(v),
-		Empty: "No matching " + v.Event + " events in this range.",
-		Kind:  columnChart, Days: days, Format: countFormat,
-		Series: []series{withValues(slot1, aggLabel(v.Agg), values)},
+		Title:  v.Title,
+		Note:   describeView(v),
+		Empty:  "No matching " + v.Event + " events in this range.",
+		Kind:   kind,
+		Days:   days,
+		Format: countFormat,
+		Series: s,
 	}
 	switch v.Agg {
-	case "sum":
-		c.Format = numberFormat
-		c.Empty = "No matching " + v.Event + " events with a value in this range."
-	case "p50", "p95":
-		c.Kind, c.Format, c.PlotZeros = lineChart, numberFormat, true
+	case "sum", "p50", "p95":
+		c.Format, c.PlotZeros = numberFormat, true
 		c.Empty = "No matching " + v.Event + " events with a value in this range."
 	}
+	return c
+}
+
+// groupLines draws a line per group. The rows come grouped, with Other
+// last. A group's day without events counts 0, and its value measures have
+// nothing to plot.
+func groupLines(v db.AppView, days []time.Time, rows []db.ViewGroupsDailyRow) chartView {
+	index := make(map[string]int, len(days))
+	for i, day := range days {
+		index[dayKey(day)] = i
+	}
+	var lines []series
+	other := false
+	for i, r := range rows {
+		if i == 0 || r.Label != rows[i-1].Label || r.Other != rows[i-1].Other {
+			s := slotOther
+			if !r.Other {
+				s = slots[len(lines)%len(slots)]
+			}
+			s.Name, s.FullName, s.Placeholder = seriesName(r.Label, r.Other)
+			s.Values = make([]*float64, len(days))
+			for j := range s.Values {
+				s.Values[j] = aggValue(v.Agg, 0, 0, 0, 0, 0, 0)
+			}
+			lines = append(lines, s)
+			other = other || r.Other
+		}
+		if j, ok := index[dayKey(r.Day.Time)]; ok {
+			lines[len(lines)-1].Values[j] = aggValue(v.Agg, r.Events, r.Devices, r.WithValue, r.Total, r.P50, r.P95)
+		}
+	}
+	c := viewChartData(v, days, lineChart, lines)
+	c.Legend = true
+	if other {
+		c.Note += " · Other pools the remaining groups"
+	}
 	return layout(c)
+}
+
+// seriesName shortens a group's label for the legend and tooltip, and
+// returns the full label when it did. placeholder is set for a name the
+// dashboard made up, which the page sets apart from labels the app sent.
+func seriesName(label string, other bool) (name, full string, placeholder bool) {
+	switch {
+	case other:
+		return "Other", "", true
+	case label == "":
+		return "Unknown", "", true
+	case utf8.RuneCountInString(label) <= maxSeriesName:
+		return label, "", false
+	}
+	return string([]rune(label)[:maxSeriesName-1]) + "…", label, false
 }
 
 // groupsFor orders the groups by the view's measure. Ties keep the query's
@@ -330,12 +413,12 @@ func viewURL(appID string, id int64) string {
 // viewForm is the view editor. ID is zero for a new view. Events and Fields
 // are suggestions from what the app has sent.
 type viewForm struct {
-	ID                                 int64
-	Title, Event, Agg, GroupBy, Filter string
-	TitleError, EventError, AggError   string
-	GroupByError, FilterError          string
-	FormError                          string
-	Events, Fields                     []string
+	ID                                        int64
+	Title, Event, Agg, GroupBy, Filter, Shape string
+	TitleError, EventError, AggError          string
+	GroupByError, FilterError, ShapeError     string
+	FormError                                 string
+	Events, Fields                            []string
 }
 
 func (f viewForm) action(appID string) string {
@@ -358,13 +441,21 @@ func (f *viewForm) validate() []byte {
 	if !ingest.ValidName(f.Event) {
 		f.EventError = "Use an event name, such as vpn.connect."
 	}
-	if !slices.ContainsFunc(aggregates, func(a aggregate) bool { return a.ID == f.Agg }) {
+	if !slices.ContainsFunc(aggregates, func(a option) bool { return a.ID == f.Agg }) {
 		f.AggError = "Choose a measure."
 	}
 	if f.GroupBy != "" {
 		if _, _, ok := parseField(f.GroupBy); !ok {
 			f.GroupByError = "Use platform, app_version, country or props.<key>."
 		}
+	}
+	if !slices.ContainsFunc(shapes, func(s option) bool { return s.ID == f.Shape }) {
+		f.ShapeError = "Choose a table or lines."
+	}
+	// The shape has nothing to arrange without groups, and the database
+	// keeps lines to grouped views.
+	if f.GroupBy == "" {
+		f.Shape = "table"
 	}
 	filter, msg := parseFilter(f.Filter)
 	f.FilterError = msg
@@ -373,7 +464,7 @@ func (f *viewForm) validate() []byte {
 
 func (f viewForm) valid() bool {
 	return f.TitleError == "" && f.EventError == "" && f.AggError == "" &&
-		f.GroupByError == "" && f.FilterError == ""
+		f.GroupByError == "" && f.FilterError == "" && f.ShapeError == ""
 }
 
 // suggest fills the editor's suggestions from the catalog's first page.
@@ -431,7 +522,7 @@ func (d *dashboard) newView(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	f := viewForm{Agg: "count"}
+	f := viewForm{Agg: "count", Shape: "table"}
 	if err := d.suggest(r.Context(), app.ID, &f); err != nil {
 		return err
 	}
@@ -447,7 +538,7 @@ func (d *dashboard) editView(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	f := viewForm{ID: v.ID, Title: v.Title, Event: v.Event, Agg: v.Agg, GroupBy: v.GroupBy}
+	f := viewForm{ID: v.ID, Title: v.Title, Event: v.Event, Agg: v.Agg, GroupBy: v.GroupBy, Shape: v.Shape}
 	if string(v.Filter) != "{}" {
 		f.Filter = string(v.Filter)
 	}
@@ -470,6 +561,7 @@ func (d *dashboard) saveView(w http.ResponseWriter, r *http.Request) error {
 		Agg:     r.PostFormValue("agg"),
 		GroupBy: strings.TrimSpace(r.PostFormValue("group_by")),
 		Filter:  strings.TrimSpace(r.PostFormValue("filter")),
+		Shape:   cmp.Or(r.PostFormValue("shape"), "table"),
 	}
 	if id := r.PathValue("view"); id != "" {
 		v, err := d.view(ctx, app.ID, id)
@@ -500,7 +592,7 @@ func (d *dashboard) storeView(ctx context.Context, appID string, f *viewForm, fi
 	if f.ID == 0 {
 		_, err := d.q.CreateView(ctx, db.CreateViewParams{
 			AppID: appID, Title: f.Title, Event: f.Event, Agg: f.Agg, GroupBy: f.GroupBy,
-			Filter: filter, MaxViews: maxViews,
+			Filter: filter, Shape: f.Shape, MaxViews: maxViews,
 		})
 		if errors.Is(err, pgx.ErrNoRows) {
 			f.FormError = fmt.Sprintf("An app can have at most %d views.", maxViews)
@@ -510,7 +602,7 @@ func (d *dashboard) storeView(ctx context.Context, appID string, f *viewForm, fi
 	}
 	n, err := d.q.UpdateView(ctx, db.UpdateViewParams{
 		AppID: appID, ID: f.ID, Title: f.Title, Event: f.Event, Agg: f.Agg, GroupBy: f.GroupBy,
-		Filter: filter,
+		Filter: filter, Shape: f.Shape,
 	})
 	if err == nil && n == 0 {
 		return false, web.ErrNotFound

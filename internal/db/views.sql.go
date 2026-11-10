@@ -13,9 +13,9 @@ import (
 )
 
 const createView = `-- name: CreateView :one
-INSERT INTO app_views (app_id, title, event, agg, group_by, filter)
-SELECT $1, $2, $3, $4, $5, $6
-WHERE (SELECT count(*) FROM app_views v WHERE v.app_id = $1) < $7::bigint
+INSERT INTO app_views (app_id, title, event, agg, group_by, filter, shape)
+SELECT $1, $2, $3, $4, $5, $6, $7
+WHERE (SELECT count(*) FROM app_views v WHERE v.app_id = $1) < $8::bigint
 RETURNING id
 `
 
@@ -26,6 +26,7 @@ type CreateViewParams struct {
 	Agg      string
 	GroupBy  string
 	Filter   []byte
+	Shape    string
 	MaxViews int64
 }
 
@@ -38,6 +39,7 @@ func (q *Queries) CreateView(ctx context.Context, arg CreateViewParams) (int64, 
 		arg.Agg,
 		arg.GroupBy,
 		arg.Filter,
+		arg.Shape,
 		arg.MaxViews,
 	)
 	var id int64
@@ -63,7 +65,7 @@ func (q *Queries) DeleteView(ctx context.Context, arg DeleteViewParams) (int64, 
 }
 
 const getView = `-- name: GetView :one
-SELECT id, app_id, title, event, agg, group_by, filter, created_at FROM app_views WHERE app_id = $1 AND id = $2
+SELECT id, app_id, title, event, agg, group_by, filter, created_at, shape FROM app_views WHERE app_id = $1 AND id = $2
 `
 
 type GetViewParams struct {
@@ -83,12 +85,13 @@ func (q *Queries) GetView(ctx context.Context, arg GetViewParams) (AppView, erro
 		&i.GroupBy,
 		&i.Filter,
 		&i.CreatedAt,
+		&i.Shape,
 	)
 	return i, err
 }
 
 const listViews = `-- name: ListViews :many
-SELECT id, app_id, title, event, agg, group_by, filter, created_at FROM app_views WHERE app_id = $1 ORDER BY id
+SELECT id, app_id, title, event, agg, group_by, filter, created_at, shape FROM app_views WHERE app_id = $1 ORDER BY id
 `
 
 func (q *Queries) ListViews(ctx context.Context, appID string) ([]AppView, error) {
@@ -109,6 +112,7 @@ func (q *Queries) ListViews(ctx context.Context, appID string) ([]AppView, error
 			&i.GroupBy,
 			&i.Filter,
 			&i.CreatedAt,
+			&i.Shape,
 		); err != nil {
 			return nil, err
 		}
@@ -122,8 +126,8 @@ func (q *Queries) ListViews(ctx context.Context, appID string) ([]AppView, error
 
 const updateView = `-- name: UpdateView :execrows
 UPDATE app_views
-SET title = $1, event = $2, agg = $3, group_by = $4, filter = $5
-WHERE app_id = $6 AND id = $7
+SET title = $1, event = $2, agg = $3, group_by = $4, filter = $5, shape = $6
+WHERE app_id = $7 AND id = $8
 `
 
 type UpdateViewParams struct {
@@ -132,6 +136,7 @@ type UpdateViewParams struct {
 	Agg     string
 	GroupBy string
 	Filter  []byte
+	Shape   string
 	AppID   string
 	ID      int64
 }
@@ -143,6 +148,7 @@ func (q *Queries) UpdateView(ctx context.Context, arg UpdateViewParams) (int64, 
 		arg.Agg,
 		arg.GroupBy,
 		arg.Filter,
+		arg.Shape,
 		arg.AppID,
 		arg.ID,
 	)
@@ -323,6 +329,121 @@ func (q *Queries) ViewGroups(ctx context.Context, arg ViewGroupsParams) ([]ViewG
 		var i ViewGroupsRow
 		if err := rows.Scan(
 			&i.Label,
+			&i.Events,
+			&i.Devices,
+			&i.WithValue,
+			&i.Total,
+			&i.P50,
+			&i.P95,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const viewGroupsDaily = `-- name: ViewGroupsDaily :many
+WITH matched AS (
+    SELECT coalesce(CASE $1::text
+               WHEN 'platform' THEN e.platform
+               WHEN 'app_version' THEN e.app_version
+               WHEN 'country' THEN e.country
+               ELSE left(e.props ->> $2::text, 200)
+           END, '')::text AS label,
+           (e.ts AT TIME ZONE 'UTC')::date AS day,
+           e.device_id,
+           e.value
+    FROM events e
+    WHERE e.app_id = $3 AND e.name = $4 AND e.ts >= $5 AND e.ts < $6
+      AND ($7::jsonb = '{}'::jsonb OR e.props @> $7::jsonb)
+      AND ($8::text IS NULL OR e.platform = $8)
+      AND ($9::text IS NULL OR e.app_version = $9)
+      AND ($10::text IS NULL OR e.country = $10)
+), top AS (
+    SELECT m.label, row_number() OVER (ORDER BY count(*) DESC, m.label) AS rank
+    FROM matched m
+    GROUP BY m.label
+    ORDER BY 2
+    LIMIT $11
+)
+SELECT g.label, g.other, g.day, g.events, g.devices, g.with_value, g.total,
+       coalesce(g.p[1], 0)::double precision AS p50,
+       coalesce(g.p[2], 0)::double precision AS p95
+FROM (
+    SELECT coalesce(t.label, '')::text AS label,
+           t.rank,
+           (t.rank IS NULL)::boolean AS other,
+           m.day,
+           count(*) AS events,
+           count(DISTINCT m.device_id) AS devices,
+           count(m.value) AS with_value,
+           coalesce(sum(m.value), 0)::double precision AS total,
+           percentile_cont(ARRAY[0.5, 0.95]::double precision[]) WITHIN GROUP (ORDER BY m.value) AS p
+    FROM matched m
+    LEFT JOIN top t ON t.label = m.label
+    GROUP BY t.label, t.rank, m.day
+) g
+ORDER BY g.rank NULLS LAST, g.day
+`
+
+type ViewGroupsDailyParams struct {
+	Dimension   string
+	PropKey     string
+	AppID       string
+	Name        string
+	Since       time.Time
+	Until       time.Time
+	PropsFilter []byte
+	Platform    *string
+	AppVersion  *string
+	Country     *string
+	GroupLimit  int32
+}
+
+type ViewGroupsDailyRow struct {
+	Label     string
+	Other     bool
+	Day       pgtype.Date
+	Events    int64
+	Devices   int64
+	WithValue int64
+	Total     float64
+	P50       float64
+	P95       float64
+}
+
+// The top groups by count over the range get a row per day, and the other
+// groups share one row per day with other set. Rows come in the groups'
+// order by count, then by day.
+func (q *Queries) ViewGroupsDaily(ctx context.Context, arg ViewGroupsDailyParams) ([]ViewGroupsDailyRow, error) {
+	rows, err := q.db.Query(ctx, viewGroupsDaily,
+		arg.Dimension,
+		arg.PropKey,
+		arg.AppID,
+		arg.Name,
+		arg.Since,
+		arg.Until,
+		arg.PropsFilter,
+		arg.Platform,
+		arg.AppVersion,
+		arg.Country,
+		arg.GroupLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ViewGroupsDailyRow{}
+	for rows.Next() {
+		var i ViewGroupsDailyRow
+		if err := rows.Scan(
+			&i.Label,
+			&i.Other,
+			&i.Day,
 			&i.Events,
 			&i.Devices,
 			&i.WithValue,
