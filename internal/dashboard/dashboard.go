@@ -36,6 +36,10 @@ type Config struct {
 	// BrandDir holds logo.svg and optionally favicon.svg; empty means the
 	// built-in mark.
 	BrandDir string
+	// Version is the server version shown in the footer; empty shows none.
+	Version string
+	// ShowTiming shows in the footer how long the page took.
+	ShowTiming bool
 	// Now is the current time; nil means time.Now.
 	Now func() time.Time
 	// RequestTimeout limits each request; zero means 20 seconds.
@@ -94,6 +98,12 @@ func New(pool *pgxpool.Pool, cfg Config) (http.Handler, error) {
 	h = web.Timeout(timeout)(h)
 	h = assets.Middleware(h)
 	h = brand.Middleware(h)
+	if cfg.Version != "" {
+		h = web.WithVersion(cfg.Version)(h)
+	}
+	if cfg.ShowTiming {
+		h = web.WithTiming(h)
+	}
 	h = http.NewCrossOriginProtection().Handler(h)
 	h = web.SecureHeaders(cfg.ViteURL)(h)
 	return h, nil

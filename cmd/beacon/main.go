@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"syscall"
 	"time"
 
@@ -103,10 +104,16 @@ func serve(ctx context.Context, cfg config.Config) error {
 		return err
 	}
 	defer dashPool.Close()
+	var v string
+	if bi, ok := debug.ReadBuildInfo(); ok && cfg.ShowVersion {
+		v = version(bi)
+	}
 	dash, err := dashboard.New(dashPool, dashboard.Config{
-		ViteURL:   cfg.ViteURL,
-		BrandName: cfg.BrandName,
-		BrandDir:  cfg.BrandDir,
+		ViteURL:    cfg.ViteURL,
+		BrandName:  cfg.BrandName,
+		BrandDir:   cfg.BrandDir,
+		Version:    v,
+		ShowTiming: cfg.ShowTiming,
 	})
 	if err != nil {
 		return err

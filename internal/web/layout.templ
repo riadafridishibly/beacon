@@ -26,8 +26,9 @@ type Nav struct {
 }
 
 // Layout is the page frame: a header, the htmx error banner, the main column
-// and a footer. The footer link is the attribution DB-IP's licence requires
-// on pages that show its data.
+// and a footer. The footer's DB-IP link is the attribution its licence
+// requires on pages that show its data. The version and timing show only to
+// a signed-in account.
 templ Layout(title string, nav *Nav) {
 	@Document(title) {
 		<header class="border-b border-base-300 bg-base-100">
@@ -50,8 +51,19 @@ templ Layout(title string, nav *Nav) {
 		<main class="mx-auto max-w-6xl px-4 py-8">
 			{ children... }
 		</main>
-		<footer class="mx-auto max-w-6xl px-4 pb-8 text-xs opacity-60">
+		<footer class="mx-auto flex max-w-6xl flex-wrap justify-between gap-x-4 gap-y-1 px-4 pb-8 text-xs opacity-60">
 			<a href="https://db-ip.com" class="link link-hover">IP Geolocation by DB-IP</a>
+			if nav != nil {
+				<span class="flex flex-wrap gap-x-3">
+					if Version(ctx) != "" {
+						<span>Version { Version(ctx) }</span>
+					}
+					if page, tmpl, ok := Timing(ctx); ok {
+						<span>Page { millis(page) }</span>
+						<span>Template { millis(tmpl) }</span>
+					}
+				</span>
+			}
 		</footer>
 	}
 }

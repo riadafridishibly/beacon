@@ -34,6 +34,10 @@ type Config struct {
 	// BrandDir holds logo.svg and optionally favicon.svg, which replace the
 	// built-in mark.
 	BrandDir string
+	// ShowVersion puts the server version in the dashboard footer.
+	ShowVersion bool
+	// ShowTiming puts how long each page took in the dashboard footer.
+	ShowTiming bool
 }
 
 func Load() (Config, error) {
@@ -48,6 +52,12 @@ func Load() (Config, error) {
 		c.ViteURL = env("BEACON_VITE_URL", "http://localhost:8367")
 	}
 	var err error
+	if c.ShowVersion, err = boolean("BEACON_SHOW_VERSION", true); err != nil {
+		return Config{}, err
+	}
+	if c.ShowTiming, err = boolean("BEACON_SHOW_TIMING", true); err != nil {
+		return Config{}, err
+	}
 	if c.IngestIPRate, err = intIn("BEACON_INGEST_IP_RATE", 1, 1, math.MaxInt32); err != nil {
 		return Config{}, err
 	}
@@ -86,6 +96,18 @@ func intIn(key string, fallback, lo, hi int) (int, error) {
 		return 0, fmt.Errorf("%s: %q is not an integer from %d to %d", key, v, lo, hi)
 	}
 	return n, nil
+}
+
+func boolean(key string, fallback bool) (bool, error) {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback, nil
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return false, fmt.Errorf("%s: %q is not a boolean", key, v)
+	}
+	return b, nil
 }
 
 func env(key, fallback string) string {

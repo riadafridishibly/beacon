@@ -179,6 +179,42 @@ func TestCustomBranding(t *testing.T) {
 	}
 }
 
+func TestFooterVersionAndTiming(t *testing.T) {
+	t.Parallel()
+	pool, c, pw := setup(t)
+	c.login(pw)
+	signedOut := &client{t: t}
+
+	for _, tc := range []struct {
+		cfg  Config
+		want bool
+	}{
+		{Config{Version: "v1.2.0", ShowTiming: true}, true},
+		{Config{}, false},
+	} {
+		tc.cfg.ViteURL = "http://localhost:8367"
+		h, err := New(pool, tc.cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.h, signedOut.h = h, h
+		for _, f := range []struct {
+			page string
+			body string
+			want bool
+		}{
+			{"signed in", c.do(http.MethodGet, "/", nil).Body.String(), tc.want},
+			{"login", signedOut.do(http.MethodGet, "/login", nil).Body.String(), false},
+		} {
+			for _, s := range []string{"Version v1.2.0", "<span>Template "} {
+				if got := strings.Contains(f.body, s); got != f.want {
+					t.Errorf("%+v, %s: has %q = %v", tc.cfg, f.page, s, got)
+				}
+			}
+		}
+	}
+}
+
 func TestBrandDirMustExist(t *testing.T) {
 	t.Parallel()
 	if _, err := New(testdb.New(t), Config{ViteURL: "http://localhost:8367", BrandDir: filepath.Join(t.TempDir(), "missing")}); err == nil {

@@ -8,6 +8,7 @@ require (
 	github.com/oschwald/maxminddb-golang/v2 v2.9.0
 	github.com/pressly/goose/v3 v3.29.0
 	golang.org/x/crypto v0.58.0
+	golang.org/x/mod v0.42.0
 	golang.org/x/time v0.16.0
 )
 
@@ -27,7 +28,6 @@ require (
 	github.com/natefinch/atomic v1.0.1 // indirect
 	github.com/sethvargo/go-retry v0.5.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
-	golang.org/x/mod v0.42.0 // indirect
 	golang.org/x/net v0.61.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect
