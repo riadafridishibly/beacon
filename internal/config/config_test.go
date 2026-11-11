@@ -70,3 +70,22 @@ func TestIngestRates(t *testing.T) {
 		})
 	}
 }
+
+func TestRetentionDays(t *testing.T) {
+	for _, tc := range []struct {
+		v    string
+		want int
+	}{{"", 90}, {"30", 30}, {"0", 0}} {
+		t.Setenv("BEACON_RETENTION_DAYS", tc.v)
+		c, err := Load()
+		if err != nil || c.RetentionDays != tc.want {
+			t.Errorf("%q: %d, %v; want %d", tc.v, c.RetentionDays, err, tc.want)
+		}
+	}
+	for _, v := range []string{"-1", "forever"} {
+		t.Setenv("BEACON_RETENTION_DAYS", v)
+		if _, err := Load(); err == nil {
+			t.Errorf("%q: no error", v)
+		}
+	}
+}

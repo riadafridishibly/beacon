@@ -25,6 +25,9 @@ type Config struct {
 	IngestIPRate int
 	// IngestKeyRate is the requests per second one ingest key can sustain.
 	IngestKeyRate int
+	// RetentionDays is how long events are kept, by their ts. 0 keeps them
+	// forever.
+	RetentionDays int
 	// BrandName replaces Beacon as the name shown in the dashboard.
 	BrandName string
 	// BrandDir holds logo.svg and optionally favicon.svg, which replace the
@@ -48,6 +51,9 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if c.IngestKeyRate, err = positiveInt("BEACON_INGEST_KEY_RATE", 50); err != nil {
+		return Config{}, err
+	}
+	if c.RetentionDays, err = nonNegativeInt("BEACON_RETENTION_DAYS", 90); err != nil {
 		return Config{}, err
 	}
 	for _, s := range strings.Split(os.Getenv("BEACON_TRUSTED_PROXIES"), ",") {
@@ -76,6 +82,18 @@ func positiveInt(key string, fallback int) (int, error) {
 	n, err := strconv.Atoi(v)
 	if err != nil || n <= 0 {
 		return 0, fmt.Errorf("%s: %q is not a positive integer", key, v)
+	}
+	return n, nil
+}
+
+func nonNegativeInt(key string, fallback int) (int, error) {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("%s: %q is not a non-negative integer", key, v)
 	}
 	return n, nil
 }

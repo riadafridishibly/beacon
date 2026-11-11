@@ -186,6 +186,30 @@ func TestIngestTruncatesTime(t *testing.T) {
 	}
 }
 
+func TestIngestSkipsEventsOlderThanRetention(t *testing.T) {
+	t.Parallel()
+	pool, h, key := setup(t)
+	h.(*Handler).Retention = 30 * 24 * time.Hour
+
+	rec := post(t, h, key, []byte(`{"context": {"device_id": "d1"}, "events": [
+		{"name": "old", "ts": "2026-10-09T11:59:59Z"},
+		{"name": "kept", "ts": "2026-10-09T12:00:00Z"},
+		{"name": "now"}
+	]}`), false)
+	if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), `"accepted":3`) {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	rec = post(t, h, key, []byte(`{"events": [{"name": "old", "device_id": "d1", "ts": "2025-01-01T00:00:00Z"}]}`), false)
+	if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), `"accepted":1`) {
+		t.Fatalf("only old events: %d %s", rec.Code, rec.Body)
+	}
+
+	got := load(t, pool)
+	if len(got) != 2 || got[0].Name != "kept" || got[1].Name != "now" {
+		t.Errorf("stored %+v, want kept and now", got)
+	}
+}
+
 func TestIngestEventsStoresPlace(t *testing.T) {
 	t.Parallel()
 	pool, _, _ := setup(t)
