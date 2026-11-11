@@ -17,3 +17,5 @@ which prints the ingest key. `make build` builds the frontend and embeds it
 in `bin/beacon`.
 
 Design notes, the event format and planned work are in the GitHub issues.
+
+MIT licensed; see LICENSE.
