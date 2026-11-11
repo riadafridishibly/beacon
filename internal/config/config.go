@@ -105,7 +105,7 @@ func boolean(key string, fallback bool) (bool, error) {
 	}
 	b, err := strconv.ParseBool(v)
 	if err != nil {
-		return false, fmt.Errorf("%s: %q is not true or false", key, v)
+		return false, fmt.Errorf("%s: %q is not a boolean", key, v)
 	}
 	return b, nil
 }

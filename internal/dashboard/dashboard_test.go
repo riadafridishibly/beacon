@@ -179,40 +179,38 @@ func TestCustomBranding(t *testing.T) {
 	}
 }
 
-func TestVersionInFooter(t *testing.T) {
+func TestFooterVersionAndTiming(t *testing.T) {
 	t.Parallel()
-	pool := testdb.New(t)
-	for _, tc := range []struct {
-		version string
-		want    bool
-	}{{"v1.2.0", true}, {"", false}} {
-		h, err := New(pool, Config{ViteURL: "http://localhost:8367", Version: tc.version})
-		if err != nil {
-			t.Fatal(err)
-		}
-		c := &client{t: t, h: h}
-		body := c.do(http.MethodGet, "/login", nil).Body.String()
-		if got := strings.Contains(body, "Version v1.2.0"); got != tc.want {
-			t.Errorf("version %q: footer shows it %v", tc.version, got)
-		}
-		if !tc.want && strings.Contains(body, "Version") {
-			t.Errorf("version %q: footer still has a version: %.300s", tc.version, body)
-		}
-	}
-}
+	pool, c, pw := setup(t)
+	c.login(pw)
+	signedOut := &client{t: t}
 
-func TestTimingInFooter(t *testing.T) {
-	t.Parallel()
-	pool := testdb.New(t)
-	for _, show := range []bool{true, false} {
-		h, err := New(pool, Config{ViteURL: "http://localhost:8367", ShowTiming: show})
+	for _, tc := range []struct {
+		cfg  Config
+		want bool
+	}{
+		{Config{Version: "v1.2.0", ShowTiming: true}, true},
+		{Config{}, false},
+	} {
+		tc.cfg.ViteURL = "http://localhost:8367"
+		h, err := New(pool, tc.cfg)
 		if err != nil {
 			t.Fatal(err)
 		}
-		c := &client{t: t, h: h}
-		body := c.do(http.MethodGet, "/login", nil).Body.String()
-		if got := strings.Contains(body, "<span>Template "); got != show {
-			t.Errorf("ShowTiming %v: footer shows timing %v: %.300s", show, got, body)
+		c.h, signedOut.h = h, h
+		for _, f := range []struct {
+			page string
+			body string
+			want bool
+		}{
+			{"signed in", c.do(http.MethodGet, "/", nil).Body.String(), tc.want},
+			{"login", signedOut.do(http.MethodGet, "/login", nil).Body.String(), false},
+		} {
+			for _, s := range []string{"Version v1.2.0", "<span>Template "} {
+				if got := strings.Contains(f.body, s); got != f.want {
+					t.Errorf("%+v, %s: has %q = %v", tc.cfg, f.page, s, got)
+				}
+			}
 		}
 	}
 }
