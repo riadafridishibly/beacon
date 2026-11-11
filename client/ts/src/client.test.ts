@@ -112,7 +112,7 @@ test("the queue survives a restart", async (t) => {
   const c = await createClient(opts);
   c.track("a");
   await c.close();
-  assert.throws(() => c.track("b"), BeaconError);
+  assert.ok(c.track("b") instanceof BeaconError);
 
   srv.respond = null;
   const again = await createClient(opts);
@@ -247,14 +247,53 @@ test("props must be allowed", async (t) => {
   });
   c.track("error.sync", { code: 42, message: "secret" });
   c.track("x", { message: "secret" });
-  assert.throws(() => c.track("x", [1] as never), BeaconError);
-  assert.throws(() => c.track("Bad Name"), BeaconError);
-  assert.throws(() => c.trackValue("x", Number.NaN), BeaconError);
+  assert.ok(c.track("x", [1] as never) instanceof BeaconError);
+  assert.ok(c.track("Bad Name") instanceof BeaconError);
+  assert.ok(c.trackValue("x", Number.NaN) instanceof BeaconError);
   await c.close();
   const events = decode(await srv.wait(1));
   assert.deepEqual(events[0]?.props, { code: 42 });
   assert.equal(events[1]?.props, undefined);
   assert.ok(logs.some((m) => m.includes("message")));
+});
+
+test("refused events are returned and logged, never thrown", async (t) => {
+  const srv = await startServer(t);
+  const logs: string[] = [];
+  const store = memoryStore();
+  const c = await createClient({
+    ...(await srv.options(t)),
+    store,
+    allowProps: ["a", "n"],
+    log: (m) => logs.push(m),
+  });
+  const circular: Record<string, unknown> = {};
+  circular.a = circular;
+  const getter = {
+    get a(): never {
+      throw new Error("getter");
+    },
+  };
+  const refused = [
+    c.track("x", circular),
+    c.track("x", getter),
+    c.trackError("x", "m", circular),
+    c.trackValue("x", 1, { n: 1n }),
+  ];
+  for (const err of refused) assert.ok(err instanceof BeaconError, String(err));
+  assert.equal(logs.filter((m) => m.startsWith("beacon: dropped x")).length, 3);
+  assert.equal(logs.filter((m) => m.startsWith("beacon: dropped error.x")).length, 1);
+
+  assert.equal(c.track("ok"), undefined);
+  await c.close();
+  assert.equal(names(decode(await srv.wait(1))), "ok");
+
+  assert.ok(c.track("late") instanceof BeaconError);
+  assert.ok(c.startSession() instanceof BeaconError);
+  assert.equal(c.endSession(), undefined);
+  assert.ok(c.appOpened() instanceof BeaconError);
+  assert.match(logs.at(-1) ?? "", /^beacon: dropped app\.open: client closed$/);
+  assert.equal(store.data.has("session"), false);
 });
 
 test("trackError names the event and sets message", async (t) => {
@@ -266,10 +305,10 @@ test("trackError names the event and sets message", async (t) => {
   c.trackError("engine", "boom", { code: 42, message: "old", other: 1 });
   c.trackError("sync", "");
   c.trackError("auth", "denied", null as never);
-  assert.throws(() => c.trackError("", "m"), BeaconError);
-  assert.throws(() => c.trackError("Bad Area", "m"), BeaconError);
-  assert.throws(() => c.trackError("x", "m", [1] as never), BeaconError);
-  assert.throws(() => c.trackError("x", "", [1] as never), BeaconError);
+  assert.ok(c.trackError("", "m") instanceof BeaconError);
+  assert.ok(c.trackError("Bad Area", "m") instanceof BeaconError);
+  assert.ok(c.trackError("x", "m", [1] as never) instanceof BeaconError);
+  assert.ok(c.trackError("x", "", [1] as never) instanceof BeaconError);
   await c.close();
   const events = decode(await srv.wait(1));
   assert.equal(events.length, 3);

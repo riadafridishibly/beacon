@@ -30,7 +30,7 @@ export interface WireEvent {
   props?: Props;
 }
 
-/** BeaconError is thrown for an event or configuration the client refuses. */
+/** BeaconError reports an event or configuration the client refuses. */
 export class BeaconError extends Error {
   override name = "BeaconError";
 }

@@ -72,6 +72,14 @@ function safeLog(log: ClientOptions["log"]): (message: string) => void {
   };
 }
 
+function errorText(err: unknown): string {
+  try {
+    return err instanceof Error ? err.message : String(err);
+  } catch {
+    return "unknown error";
+  }
+}
+
 function formatTime(ms: number): string {
   return new Date(ms).toISOString().replace(".000Z", "Z");
 }
@@ -155,33 +163,42 @@ export class Client {
   }
 
   /**
-   * track queues an event. It throws if the server would reject it. Report
-   * errors with trackError: the dashboard counts only names starting "error.".
+   * track queues an event. It returns an error, and logs it, if the event is
+   * one the server would reject or the client is closed; it never throws.
+   * Report errors with trackError: the dashboard counts only names starting
+   * "error.".
    */
-  track(name: string, props?: Props): void {
-    this.trackEvent(name, undefined, props);
+  track(name: string, props?: Props): BeaconError | undefined {
+    return this.guard(name, () => this.trackEvent(name, undefined, props));
   }
 
   /**
    * trackError queues error.<area>, counted as an error by the dashboard. A
    * non-empty message, cut to 2 KiB, replaces props.message if allowed.
    */
-  trackError(area: string, message: string, props?: Props): void {
-    // A message that isn't allowed stays out of props, or every error would log a drop.
-    const clean = this.allowed.has("message") ? cleanMessage(message) : "";
-    this.trackEvent(`error.${area}`, undefined, withMessage(props, clean));
+  trackError(area: string, message: string, props?: Props): BeaconError | undefined {
+    const name = `error.${area}`;
+    return this.guard(name, () => {
+      // A message that isn't allowed stays out of props, or every error would log a drop.
+      const clean = this.allowed.has("message") ? cleanMessage(message) : "";
+      this.trackEvent(name, undefined, withMessage(props, clean));
+    });
   }
 
   /** trackValue queues an event with its one numeric measure, such as a duration in ms. */
-  trackValue(name: string, value: number, props?: Props): void {
-    this.trackEvent(name, value, props);
+  trackValue(name: string, value: number, props?: Props): BeaconError | undefined {
+    return this.guard(name, () => this.trackEvent(name, value, props));
   }
 
   /** appOpened records app.open once per process. Call it when the first screen is usable. */
-  appOpened(): void {
-    if (this.opened) return;
+  appOpened(): BeaconError | undefined {
+    if (this.opened) return undefined;
     this.opened = true;
-    this.enqueue("app.open", Math.floor(Math.max(this.now() - this.startedMs, 0)), { cold: true });
+    return this.guard("app.open", () =>
+      this.enqueue("app.open", Math.floor(Math.max(this.now() - this.startedMs, 0)), {
+        cold: true,
+      }),
+    );
   }
 
   /**
@@ -189,25 +206,30 @@ export class Client {
    * while one is open. A session the app never ends, because it crashed or
    * was killed, is ended by the next client created on the same store.
    */
-  startSession(): void {
-    if (this.sessionId !== "") return;
-    this.sessionId = this.randomId();
-    this.sessionStartMs = this.now();
-    this.reported = 0;
-    this.add(this.event("session.start", this.sessionStartMs));
-    this.saveSession(this.sessionStartMs);
+  startSession(): BeaconError | undefined {
+    if (this.sessionId !== "") return undefined;
+    return this.guard("session.start", () => {
+      const id = this.randomId();
+      const now = this.now();
+      // No session opens unless its session.start is queued.
+      this.add({ ...this.event("session.start", now), session_id: id });
+      this.sessionId = id;
+      this.sessionStartMs = now;
+      this.reported = 0;
+      this.saveSession(now);
+    });
   }
 
   /** endSession sends session.end and closes the session. */
-  endSession(): void {
-    if (this.sessionId === "") return;
-    try {
+  endSession(): BeaconError | undefined {
+    if (this.sessionId === "") return undefined;
+    const err = this.guard("session.end", () => {
       const now = this.now();
       this.add(this.event("session.end", now, this.unreported(now).secs));
-    } finally {
-      this.sessionId = "";
-      this.writeSession((store) => store.remove("session"));
-    }
+    });
+    this.sessionId = "";
+    this.writeSession((store) => store.remove("session"));
+    return err;
   }
 
   /** flush starts sending queued events now, without waiting for them. */
@@ -248,6 +270,23 @@ export class Client {
     const { props, dropped } = filterProps(rawProps, this.allowed);
     if (dropped.length > 0) this.logf(`${name}: dropped props not allowed: ${dropped.join(", ")}`);
     this.enqueue(name, value, props);
+  }
+
+  // Runs fn and returns what it throws as a BeaconError, after logging it.
+  // Props can throw from a getter or toJSON, or fail to stringify when
+  // circular, and none of that may reach the app.
+  private guard(name: string, fn: () => void): BeaconError | undefined {
+    try {
+      fn();
+      return undefined;
+    } catch (cause) {
+      const err =
+        cause instanceof BeaconError
+          ? cause
+          : new BeaconError(`beacon: ${errorText(cause)}`, { cause });
+      this.logf(`dropped ${name}: ${err.message.replace(/^beacon: /, "")}`);
+      return err;
+    }
   }
 
   private heartbeat(): void {
