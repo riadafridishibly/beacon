@@ -72,12 +72,24 @@ function safeLog(log: ClientOptions["log"]): (message: string) => void {
   };
 }
 
-function errorText(err: unknown): string {
+// Callers can pass a Symbol, a revoked Proxy or an object whose toString
+// throws, and the text is built while handling an error.
+function describe(value: () => unknown): string {
   try {
-    return err instanceof Error ? err.message : String(err);
+    const v = value();
+    return v instanceof Error ? v.message : String(v);
   } catch {
-    return "unknown error";
+    return "unknown value";
   }
+}
+
+function asBeaconError(cause: unknown): BeaconError {
+  try {
+    if (cause instanceof BeaconError) return cause;
+  } catch {
+    // instanceof throws on a revoked Proxy.
+  }
+  return new BeaconError(`beacon: ${describe(() => cause)}`, { cause });
 }
 
 function formatTime(ms: number): string {
@@ -169,7 +181,10 @@ export class Client {
    * "error.".
    */
   track(name: string, props?: Props): BeaconError | undefined {
-    return this.guard(name, () => this.trackEvent(name, undefined, props));
+    return this.guard(
+      () => name,
+      () => this.trackEvent(name, undefined, props),
+    );
   }
 
   /**
@@ -177,27 +192,32 @@ export class Client {
    * non-empty message, cut to 2 KiB, replaces props.message if allowed.
    */
   trackError(area: string, message: string, props?: Props): BeaconError | undefined {
-    const name = `error.${area}`;
+    const name = () => `error.${area}`;
     return this.guard(name, () => {
       // A message that isn't allowed stays out of props, or every error would log a drop.
       const clean = this.allowed.has("message") ? cleanMessage(message) : "";
-      this.trackEvent(name, undefined, withMessage(props, clean));
+      this.trackEvent(name(), undefined, withMessage(props, clean));
     });
   }
 
   /** trackValue queues an event with its one numeric measure, such as a duration in ms. */
   trackValue(name: string, value: number, props?: Props): BeaconError | undefined {
-    return this.guard(name, () => this.trackEvent(name, value, props));
+    return this.guard(
+      () => name,
+      () => this.trackEvent(name, value, props),
+    );
   }
 
   /** appOpened records app.open once per process. Call it when the first screen is usable. */
   appOpened(): BeaconError | undefined {
     if (this.opened) return undefined;
     this.opened = true;
-    return this.guard("app.open", () =>
-      this.enqueue("app.open", Math.floor(Math.max(this.now() - this.startedMs, 0)), {
-        cold: true,
-      }),
+    return this.guard(
+      () => "app.open",
+      () =>
+        this.enqueue("app.open", Math.floor(Math.max(this.now() - this.startedMs, 0)), {
+          cold: true,
+        }),
     );
   }
 
@@ -208,25 +228,31 @@ export class Client {
    */
   startSession(): BeaconError | undefined {
     if (this.sessionId !== "") return undefined;
-    return this.guard("session.start", () => {
-      const id = this.randomId();
-      const now = this.now();
-      // No session opens unless its session.start is queued.
-      this.add({ ...this.event("session.start", now), session_id: id });
-      this.sessionId = id;
-      this.sessionStartMs = now;
-      this.reported = 0;
-      this.saveSession(now);
-    });
+    return this.guard(
+      () => "session.start",
+      () => {
+        const id = this.randomId();
+        const now = this.now();
+        // No session opens unless its session.start is queued.
+        this.add({ ...this.event("session.start", now), session_id: id });
+        this.sessionId = id;
+        this.sessionStartMs = now;
+        this.reported = 0;
+        this.saveSession(now);
+      },
+    );
   }
 
   /** endSession sends session.end and closes the session. */
   endSession(): BeaconError | undefined {
     if (this.sessionId === "") return undefined;
-    const err = this.guard("session.end", () => {
-      const now = this.now();
-      this.add(this.event("session.end", now, this.unreported(now).secs));
-    });
+    const err = this.guard(
+      () => "session.end",
+      () => {
+        const now = this.now();
+        this.add(this.event("session.end", now, this.unreported(now).secs));
+      },
+    );
     this.sessionId = "";
     this.writeSession((store) => store.remove("session"));
     return err;
@@ -274,17 +300,15 @@ export class Client {
 
   // Runs fn and returns what it throws as a BeaconError, after logging it.
   // Props can throw from a getter or toJSON, or fail to stringify when
-  // circular, and none of that may reach the app.
-  private guard(name: string, fn: () => void): BeaconError | undefined {
+  // circular, and none of that may reach the app. name is a function so that
+  // building it can't throw outside the catch either.
+  private guard(name: () => string, fn: () => void): BeaconError | undefined {
     try {
       fn();
       return undefined;
     } catch (cause) {
-      const err =
-        cause instanceof BeaconError
-          ? cause
-          : new BeaconError(`beacon: ${errorText(cause)}`, { cause });
-      this.logf(`dropped ${name}: ${err.message.replace(/^beacon: /, "")}`);
+      const err = asBeaconError(cause);
+      this.logf(`dropped ${describe(name)}: ${err.message.replace(/^beacon: /, "")}`);
       return err;
     }
   }

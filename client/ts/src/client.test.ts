@@ -274,15 +274,33 @@ test("refused events are returned and logged, never thrown", async (t) => {
       throw new Error("getter");
     },
   };
+  const { proxy, revoke } = Proxy.revocable({}, {});
+  revoke();
+  const throwsRevoked = {
+    toJSON() {
+      throw proxy;
+    },
+  };
+  const badString = {
+    toString(): never {
+      throw new Error("toString");
+    },
+  };
   const refused = [
     c.track("x", circular),
     c.track("x", getter),
     c.trackError("x", "m", circular),
     c.trackValue("x", 1, { n: 1n }),
+    c.track("x", { a: throwsRevoked }),
+    c.track(Symbol("s") as never),
+    c.trackError(Symbol("s") as never, "m"),
+    c.trackError(badString as never, "m"),
   ];
   for (const err of refused) assert.ok(err instanceof BeaconError, String(err));
-  assert.equal(logs.filter((m) => m.startsWith("beacon: dropped x")).length, 3);
+  assert.equal(logs.filter((m) => m.startsWith("beacon: dropped x")).length, 4);
   assert.equal(logs.filter((m) => m.startsWith("beacon: dropped error.x")).length, 1);
+  assert.ok(logs.includes("beacon: dropped Symbol(s): Cannot convert a Symbol value to a string"));
+  assert.ok(logs.some((m) => m.startsWith("beacon: dropped unknown value: toString")));
 
   assert.equal(c.track("ok"), undefined);
   await c.close();
