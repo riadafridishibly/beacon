@@ -75,14 +75,14 @@ func TestRetentionDays(t *testing.T) {
 	for _, tc := range []struct {
 		v    string
 		want int
-	}{{"", 90}, {"30", 30}, {"0", 0}} {
+	}{{"", 90}, {"30", 30}, {"0", 0}, {"36500", 36500}} {
 		t.Setenv("BEACON_RETENTION_DAYS", tc.v)
 		c, err := Load()
 		if err != nil || c.RetentionDays != tc.want {
 			t.Errorf("%q: %d, %v; want %d", tc.v, c.RetentionDays, err, tc.want)
 		}
 	}
-	for _, v := range []string{"-1", "forever"} {
+	for _, v := range []string{"-1", "forever", "36501", "213504"} {
 		t.Setenv("BEACON_RETENTION_DAYS", v)
 		if _, err := Load(); err == nil {
 			t.Errorf("%q: no error", v)

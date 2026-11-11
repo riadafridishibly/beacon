@@ -3,6 +3,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"net/netip"
 	"os"
 	"strconv"
@@ -47,13 +48,14 @@ func Load() (Config, error) {
 		c.ViteURL = env("BEACON_VITE_URL", "http://localhost:8367")
 	}
 	var err error
-	if c.IngestIPRate, err = positiveInt("BEACON_INGEST_IP_RATE", 1); err != nil {
+	if c.IngestIPRate, err = intIn("BEACON_INGEST_IP_RATE", 1, 1, math.MaxInt32); err != nil {
 		return Config{}, err
 	}
-	if c.IngestKeyRate, err = positiveInt("BEACON_INGEST_KEY_RATE", 50); err != nil {
+	if c.IngestKeyRate, err = intIn("BEACON_INGEST_KEY_RATE", 50, 1, math.MaxInt32); err != nil {
 		return Config{}, err
 	}
-	if c.RetentionDays, err = nonNegativeInt("BEACON_RETENTION_DAYS", 90); err != nil {
+	// The cap keeps the window, in nanoseconds, inside a time.Duration.
+	if c.RetentionDays, err = intIn("BEACON_RETENTION_DAYS", 90, 0, 36500); err != nil {
 		return Config{}, err
 	}
 	for _, s := range strings.Split(os.Getenv("BEACON_TRUSTED_PROXIES"), ",") {
@@ -74,26 +76,14 @@ func Load() (Config, error) {
 	return c, nil
 }
 
-func positiveInt(key string, fallback int) (int, error) {
+func intIn(key string, fallback, lo, hi int) (int, error) {
 	v := os.Getenv(key)
 	if v == "" {
 		return fallback, nil
 	}
 	n, err := strconv.Atoi(v)
-	if err != nil || n <= 0 {
-		return 0, fmt.Errorf("%s: %q is not a positive integer", key, v)
-	}
-	return n, nil
-}
-
-func nonNegativeInt(key string, fallback int) (int, error) {
-	v := os.Getenv(key)
-	if v == "" {
-		return fallback, nil
-	}
-	n, err := strconv.Atoi(v)
-	if err != nil || n < 0 {
-		return 0, fmt.Errorf("%s: %q is not a non-negative integer", key, v)
+	if err != nil || n < lo || n > hi {
+		return 0, fmt.Errorf("%s: %q is not an integer from %d to %d", key, v, lo, hi)
 	}
 	return n, nil
 }

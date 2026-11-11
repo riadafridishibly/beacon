@@ -133,6 +133,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := h.now()
+	var cutoff time.Time
+	if h.Retention > 0 {
+		cutoff = now.Add(-h.Retention)
+	}
 	country, city := h.Geo.Lookup(clientAddr(r))
 	rows := make([]row, 0, len(batch.Events))
 	for i, e := range batch.Events {
@@ -143,7 +147,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		// Retention would delete it within a day, and a client resending it
 		// after that would store it again, since its event_id is gone too.
-		if h.Retention > 0 && row.TS.Before(now.Add(-h.Retention)) {
+		if h.Retention > 0 && row.TS.Before(cutoff) {
 			continue
 		}
 		rows = append(rows, row)
