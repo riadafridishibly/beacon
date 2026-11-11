@@ -48,7 +48,7 @@ func Handle(h HandlerFunc) http.Handler {
 // template error never leaves a half-written page.
 func Render(w http.ResponseWriter, r *http.Request, status int, c templ.Component) error {
 	var buf bytes.Buffer
-	if err := c.Render(r.Context(), &buf); err != nil {
+	if err := c.Render(withRenderTime(r.Context()), &buf); err != nil {
 		return fmt.Errorf("render: %w", err)
 	}
 	h := w.Header()

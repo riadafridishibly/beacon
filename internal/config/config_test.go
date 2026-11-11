@@ -39,6 +39,33 @@ func TestBrand(t *testing.T) {
 	}
 }
 
+func TestFooterSwitches(t *testing.T) {
+	for _, sw := range []struct {
+		env string
+		get func(Config) bool
+	}{
+		{"BEACON_SHOW_VERSION", func(c Config) bool { return c.ShowVersion }},
+		{"BEACON_SHOW_TIMING", func(c Config) bool { return c.ShowTiming }},
+	} {
+		t.Run(sw.env, func(t *testing.T) {
+			for _, tc := range []struct {
+				v    string
+				want bool
+			}{{"", true}, {"true", true}, {"1", true}, {"false", false}, {"0", false}} {
+				t.Setenv(sw.env, tc.v)
+				c, err := Load()
+				if err != nil || sw.get(c) != tc.want {
+					t.Errorf("%q: %v, %v; want %v", tc.v, sw.get(c), err, tc.want)
+				}
+			}
+			t.Setenv(sw.env, "off")
+			if _, err := Load(); err == nil {
+				t.Error("off: no error")
+			}
+		})
+	}
+}
+
 func TestIngestRates(t *testing.T) {
 	for _, tc := range []struct {
 		env      string

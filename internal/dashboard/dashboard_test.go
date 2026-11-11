@@ -179,6 +179,44 @@ func TestCustomBranding(t *testing.T) {
 	}
 }
 
+func TestVersionInFooter(t *testing.T) {
+	t.Parallel()
+	pool := testdb.New(t)
+	for _, tc := range []struct {
+		version string
+		want    bool
+	}{{"v1.2.0", true}, {"", false}} {
+		h, err := New(pool, Config{ViteURL: "http://localhost:8367", Version: tc.version})
+		if err != nil {
+			t.Fatal(err)
+		}
+		c := &client{t: t, h: h}
+		body := c.do(http.MethodGet, "/login", nil).Body.String()
+		if got := strings.Contains(body, "Version v1.2.0"); got != tc.want {
+			t.Errorf("version %q: footer shows it %v", tc.version, got)
+		}
+		if !tc.want && strings.Contains(body, "Version") {
+			t.Errorf("version %q: footer still has a version: %.300s", tc.version, body)
+		}
+	}
+}
+
+func TestTimingInFooter(t *testing.T) {
+	t.Parallel()
+	pool := testdb.New(t)
+	for _, show := range []bool{true, false} {
+		h, err := New(pool, Config{ViteURL: "http://localhost:8367", ShowTiming: show})
+		if err != nil {
+			t.Fatal(err)
+		}
+		c := &client{t: t, h: h}
+		body := c.do(http.MethodGet, "/login", nil).Body.String()
+		if got := strings.Contains(body, "<span>Template "); got != show {
+			t.Errorf("ShowTiming %v: footer shows timing %v: %.300s", show, got, body)
+		}
+	}
+}
+
 func TestBrandDirMustExist(t *testing.T) {
 	t.Parallel()
 	if _, err := New(testdb.New(t), Config{ViteURL: "http://localhost:8367", BrandDir: filepath.Join(t.TempDir(), "missing")}); err == nil {
