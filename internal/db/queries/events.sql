@@ -35,3 +35,13 @@ WHERE app_id = @app_id
   AND (sqlc.narg('app_version')::text IS NULL OR app_version = sqlc.narg('app_version'))
 ORDER BY ts DESC, id DESC
 LIMIT @page_limit;
+
+-- DeleteEventsBefore deletes up to batch_size of an app's events older than
+-- before. Small batches keep each transaction short while ingest runs.
+-- name: DeleteEventsBefore :execrows
+DELETE FROM events
+WHERE id IN (
+    SELECT e.id FROM events e
+    WHERE e.app_id = @app_id AND e.ts < @before
+    LIMIT @batch_size
+);

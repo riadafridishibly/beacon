@@ -33,6 +33,7 @@ internal/config/     BEACON_* environment
 internal/db/         Connect, Migrate, migrations/, queries/, sqlc output (don't edit generated files)
 internal/apps/       apps, ingest keys, Resolver (key -> app id, cached)
 internal/ingest/     POST /v1/events
+internal/retention/  daily deletion of events older than BEACON_RETENTION_DAYS
 internal/geo/        country and city from a MaxMind format database
 internal/auth/       dashboard accounts, argon2id passwords, sessions, login page
 internal/dashboard/  dashboard handler and pages

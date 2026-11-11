@@ -81,14 +81,16 @@ type Apps interface {
 	App(ctx context.Context, key string) (string, error)
 }
 
-// Handler serves POST /v1/events. ByIP and ByKey are required.
+// Handler serves POST /v1/events. ByIP and ByKey are required. Events
+// older than Retention are accepted but not stored; 0 stores them all.
 type Handler struct {
-	Apps  Apps
-	DB    *db.Queries
-	Geo   *geo.Locator
-	ByIP  *web.Limiter
-	ByKey *web.Limiter
-	Now   func() time.Time
+	Apps      Apps
+	DB        *db.Queries
+	Geo       *geo.Locator
+	ByIP      *web.Limiter
+	ByKey     *web.Limiter
+	Retention time.Duration
+	Now       func() time.Time
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -131,15 +133,31 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := h.now()
+	var cutoff time.Time
+	if h.Retention > 0 {
+		cutoff = now.Add(-h.Retention)
+	}
 	country, city := h.Geo.Lookup(clientAddr(r))
-	rows := make([]row, len(batch.Events))
+	rows := make([]row, 0, len(batch.Events))
 	for i, e := range batch.Events {
 		row, err := toRow(batch.Context, e, now)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error(), i)
 			return
 		}
-		rows[i] = row
+		// Retention would delete it within a day, and a client resending it
+		// after that would store it again, since its event_id is gone too.
+		if h.Retention > 0 && row.TS.Before(cutoff) {
+			continue
+		}
+		rows = append(rows, row)
+	}
+	if expired := len(batch.Events) - len(rows); expired > 0 {
+		slog.InfoContext(r.Context(), "skipped events older than retention", "app", appID, "events", expired)
+	}
+	if len(rows) == 0 {
+		accepted(w, len(batch.Events))
+		return
 	}
 	var events bytes.Buffer
 	enc := json.NewEncoder(&events)
@@ -174,9 +192,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if skipped := int64(len(rows)) - stored; skipped > 0 {
 		slog.InfoContext(r.Context(), "skipped events already stored", "app", appID, "events", skipped)
 	}
+	accepted(w, len(batch.Events))
+}
+
+func accepted(w http.ResponseWriter, n int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
-	_ = json.NewEncoder(w).Encode(map[string]int{"accepted": len(rows)})
+	_ = json.NewEncoder(w).Encode(map[string]int{"accepted": n})
 }
 
 // allow writes a 429 and returns false when l refuses key.

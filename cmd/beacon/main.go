@@ -20,6 +20,7 @@ import (
 	"github.com/riadafridishibly/beacon/internal/db"
 	"github.com/riadafridishibly/beacon/internal/geo"
 	"github.com/riadafridishibly/beacon/internal/ingest"
+	"github.com/riadafridishibly/beacon/internal/retention"
 	"github.com/riadafridishibly/beacon/internal/web"
 )
 
@@ -112,6 +113,11 @@ func serve(ctx context.Context, cfg config.Config) error {
 	}
 
 	q := db.New(pool)
+	keep := time.Duration(cfg.RetentionDays) * 24 * time.Hour
+	if keep > 0 {
+		go retention.Run(ctx, q, keep)
+	}
+
 	mux := http.NewServeMux()
 	mux.Handle("/", dash)
 	mux.Handle("POST /v1/events", &ingest.Handler{
@@ -123,7 +129,8 @@ func serve(ctx context.Context, cfg config.Config) error {
 		ByIP: web.NewLimiter(time.Second/time.Duration(cfg.IngestIPRate), 60*cfg.IngestIPRate),
 		// Every install of an app shares its key, so this limit grows with
 		// the number of installs.
-		ByKey: web.NewLimiter(time.Second/time.Duration(cfg.IngestKeyRate), 10*cfg.IngestKeyRate),
+		ByKey:     web.NewLimiter(time.Second/time.Duration(cfg.IngestKeyRate), 10*cfg.IngestKeyRate),
+		Retention: keep,
 	})
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		if err := pool.Ping(r.Context()); err != nil {

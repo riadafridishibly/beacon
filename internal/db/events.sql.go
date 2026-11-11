@@ -11,6 +11,31 @@ import (
 	"time"
 )
 
+const deleteEventsBefore = `-- name: DeleteEventsBefore :execrows
+DELETE FROM events
+WHERE id IN (
+    SELECT e.id FROM events e
+    WHERE e.app_id = $1 AND e.ts < $2
+    LIMIT $3
+)
+`
+
+type DeleteEventsBeforeParams struct {
+	AppID     string
+	Before    time.Time
+	BatchSize int32
+}
+
+// DeleteEventsBefore deletes up to batch_size of an app's events older than
+// before. Small batches keep each transaction short while ingest runs.
+func (q *Queries) DeleteEventsBefore(ctx context.Context, arg DeleteEventsBeforeParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteEventsBefore, arg.AppID, arg.Before, arg.BatchSize)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const ingestEvents = `-- name: IngestEvents :execrows
 INSERT INTO events (
     app_id, event_id, name, ts, device_id, user_id, session_id,
