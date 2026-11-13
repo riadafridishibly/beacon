@@ -39,9 +39,11 @@ func TestNiceTicks(t *testing.T) {
 func TestDurationTicks(t *testing.T) {
 	t.Parallel()
 	for top, want := range map[float64][]float64{
-		45:    {0, 20, 40, 60},
-		300:   {0, 120, 240, 360},
-		10000: {0, 3600, 7200, 10800},
+		45:          {0, 20, 40, 60},
+		300:         {0, 120, 240, 360},
+		10000:       {0, 3600, 7200, 10800},
+		3 * 86400:   {0, 86400, 2 * 86400, 3 * 86400},
+		800 * 86400: {0, 365 * 86400, 2 * 365 * 86400, 3 * 365 * 86400},
 	} {
 		if got := durationTicks(top); !reflect.DeepEqual(got, want) {
 			t.Errorf("durationTicks(%v) = %v, want %v", top, got, want)
@@ -61,6 +63,14 @@ func TestFormats(t *testing.T) {
 		{formatDuration(300), "5m"},
 		{formatDuration(3600), "1h"},
 		{formatDuration(5400), "1h 30m"},
+		{formatDuration(86400), "1d"},
+		{formatDuration(95760), "1d 2h"},
+		{formatDuration(76496839), "2y 155d"},
+		{durationTick(0), "0"},
+		{durationTick(7200), "2h"},
+		{durationTick(3 * 86400), "3d"},
+		{durationTick(400 * 86400), "400d"},
+		{durationTick(2 * 365 * 86400), "2y"},
 		{compactCount(9999), "9,999"},
 		{compactCount(12500), "12.5K"},
 		{compactCount(2_000_000), "2M"},
