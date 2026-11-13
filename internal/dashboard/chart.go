@@ -95,7 +95,7 @@ var (
 	}
 	durationFormat = valueFormat{
 		Value: formatDuration,
-		Tick:  formatDuration,
+		Tick:  durationTick,
 		Ticks: durationTicks,
 	}
 )
@@ -412,10 +412,27 @@ func axisTicks(f valueFormat, bottom, top float64) []float64 {
 	}
 }
 
-// durationTicks picks whole seconds, minutes or hours.
+// durationUnits are the units durations read in, largest first. A year is
+// 365 days; months are left out because they have no fixed length.
+var durationUnits = []struct {
+	seconds int64
+	suffix  string
+}{
+	{365 * 86400, "y"},
+	{86400, "d"},
+	{3600, "h"},
+	{60, "m"},
+	{1, "s"},
+}
+
+// durationTicks picks whole seconds, minutes, hours, days or years.
 func durationTicks(top float64) []float64 {
 	unit := 1.0
 	switch {
+	case top >= 365*86400:
+		unit = 365 * 86400
+	case top >= 2*86400:
+		unit = 86400
 	case top >= 7200:
 		unit = 3600
 	case top >= 120:
@@ -426,6 +443,21 @@ func durationTicks(top float64) []float64 {
 		ticks[i] *= unit
 	}
 	return ticks
+}
+
+// durationTick labels a tick in the largest unit it is a whole number of, so
+// 400 days reads as 400d rather than 1y 35d.
+func durationTick(seconds float64) string {
+	total := int64(math.Round(seconds))
+	if total <= 0 {
+		return "0"
+	}
+	for _, u := range durationUnits {
+		if total%u.seconds == 0 {
+			return fmt.Sprintf("%d%s", total/u.seconds, u.suffix)
+		}
+	}
+	return formatDuration(seconds)
 }
 
 func formatMillis(v float64) string {
@@ -447,23 +479,27 @@ func formatNumber(v float64) string {
 	return strconv.FormatFloat(v, 'g', 4, 64)
 }
 
+// formatDuration gives the largest unit and, when it isn't zero, the next one
+// down: 1h 30m, 2y 155d.
 func formatDuration(seconds float64) string {
 	total := int64(math.Round(seconds))
-	switch {
-	case total <= 0:
+	if total <= 0 {
 		return "0"
-	case total < 60:
-		return fmt.Sprintf("%ds", total)
-	case total < 3600:
-		if s := total % 60; s != 0 {
-			return fmt.Sprintf("%dm %ds", total/60, s)
+	}
+	for i, u := range durationUnits {
+		if total < u.seconds {
+			continue
 		}
-		return fmt.Sprintf("%dm", total/60)
+		out := fmt.Sprintf("%d%s", total/u.seconds, u.suffix)
+		if i+1 < len(durationUnits) {
+			next := durationUnits[i+1]
+			if n := total % u.seconds / next.seconds; n != 0 {
+				out += fmt.Sprintf(" %d%s", n, next.suffix)
+			}
+		}
+		return out
 	}
-	if m := total % 3600 / 60; m != 0 {
-		return fmt.Sprintf("%dh %dm", total/3600, m)
-	}
-	return fmt.Sprintf("%dh", total/3600)
+	return "0"
 }
 
 func compactCount(v float64) string {
